@@ -1,0 +1,8 @@
+{
+  "name": "break-retest-paper-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paper-only TradingView webhook receiver and Break & Retest signal table",
+  "scripts": {"start": "node server.js"},
+  "engines": {"node": ">=20"}
+}
