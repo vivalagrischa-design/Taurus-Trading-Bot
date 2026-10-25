@@ -10,7 +10,10 @@ MIN_REFRESH_SECONDS_5M=300
 MIN_REFRESH_SECONDS_1M=60
 
 
-def _fetch(period, interval, cache, min_refresh):
+FUTURES={'nq':'NQ=F','mes':'ES=F','mgc':'GC=F'}
+_FUTURES_CACHE={}
+
+def _fetch(period, interval, cache, min_refresh, symbol='NQ=F'):
     now=time.time()
     with _LOCK:
         if now-cache['last_attempt']<min_refresh:
@@ -18,7 +21,7 @@ def _fetch(period, interval, cache, min_refresh):
         cache['last_attempt']=now
         try:
             import yfinance as yf
-            frame=yf.Ticker('NQ=F').history(period=period,interval=interval,auto_adjust=False,prepost=True,timeout=12)
+            frame=yf.Ticker(symbol).history(period=period,interval=interval,auto_adjust=False,prepost=True,timeout=12)
             if frame.empty:
                 raise RuntimeError('Yahoo liefert aktuell keine Kerzen')
             items=[]
@@ -48,3 +51,14 @@ def fetch(force=False):
 
 def fetch_1m(force=False):
     return _fetch('7d','1m',_CACHE_1M,0 if force else MIN_REFRESH_SECONDS_1M)
+
+
+def fetch_market(market,interval='5m',force=False):
+    """Delayed proxy contracts: NQ=F -> MNQ, ES=F -> MES, GC=F -> MGC.
+    Not an exchange-grade micro-futures feed; do not live-execute from it.
+    """
+    if market not in FUTURES:raise ValueError('Unsupported futures market')
+    if interval not in ('1m','5m'):raise ValueError('Unsupported interval')
+    cache=_FUTURES_CACHE.setdefault((market,interval),{'candles':[],'last_attempt':0.,'last_success':None,'error':'Noch nicht geladen'})
+    return _fetch('7d' if interval=='1m' else '5d',interval,cache,
+                  0 if force else (MIN_REFRESH_SECONDS_1M if interval=='1m' else MIN_REFRESH_SECONDS_5M),FUTURES[market])
