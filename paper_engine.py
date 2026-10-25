@@ -2,7 +2,7 @@
 Signal bar close -> next bar OPEN. Stops take priority on ambiguous OHLC bars.
 State persisted in SQLite/PostgreSQL. Single process required.
 """
-import os,sqlite3,threading,math
+import os,sqlite3,threading,math,time
 from strategies import evaluate
 from setup_quality import score_signal
 
@@ -17,6 +17,7 @@ ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
+TEST_VERSION='bb_abc_trailing_20261025_v1'
 _LOCK=threading.RLock()
 
 
@@ -81,6 +82,16 @@ def init_extra(db):
             if name not in known:db.execute('ALTER TABLE trades ADD COLUMN '+name+' '+sqltype)
     db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT)''')
     db.execute('CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy,market,signal_time)')
+    # Preserve previous test history; initialize this experiment only once.
+    db.execute('CREATE TABLE IF NOT EXISTS paper_experiments(version TEXT PRIMARY KEY, started_at BIGINT NOT NULL)')
+    existing=db.execute('SELECT started_at FROM paper_experiments WHERE version=?',(TEST_VERSION,)).fetchone()
+    if existing is None:
+        started=int(time.time())
+        db.execute('INSERT INTO paper_experiments(version,started_at) VALUES(?,?)',(TEST_VERSION,started))
+        # Previous version must never continue into new experiment.
+        db.execute("UPDATE trades SET status='ARCHIVED',exit_reason='PREVIOUS_EXPERIMENT' WHERE status IN ('OPEN','PENDING')")
+        db.execute('DELETE FROM progress')
+
 
 
 def record_signal(db,trade_id,market,strategy,sig,decision,reason):
@@ -272,9 +283,11 @@ def advance_extremes(market,bars1m,bars5m):
 def summary(market=None):
     with _LOCK:
         with conn() as db:
-            sql='SELECT * FROM trades'; params=[]
+            exp=db.execute('SELECT started_at FROM paper_experiments WHERE version=?',(TEST_VERSION,)).fetchone()
+            started=int(exp['started_at']) if exp else int(time.time())
+            sql='SELECT * FROM trades WHERE signal_time>=?'; params=[started]
             if market in MARKETS:
-                sql+=' WHERE market=?'; params=[market]
+                sql+=' AND market=?'; params.append(market)
             sql+=' ORDER BY signal_time DESC LIMIT 700'
             trades=[dict(t) for t in db.execute(sql,params)]
             aggregate={}
@@ -290,6 +303,6 @@ def summary(market=None):
                     'pnl':round(sum(t['pnl'] or 0 for t in closed),2)
                 }
             last={r['market']:r['last_bar'] for r in db.execute('SELECT market,last_bar FROM progress').fetchall()}
-            events=[dict(r) for r in db.execute('SELECT * FROM signal_log ORDER BY signal_time DESC LIMIT 1000').fetchall()]
+            events=[dict(r) for r in db.execute('SELECT * FROM signal_log WHERE signal_time>=? ORDER BY signal_time DESC LIMIT 1000',(started,)).fetchall()]
             return {'events':events,'trades':trades,'summary':aggregate,'last_processed':last,'risk_usd':RISK,
-                    'paper_only':True,'persistence':'PostgreSQL' if DATABASE_URL else DB,'markets':list(MARKETS)}
+                    'paper_only':True,'experiment':TEST_VERSION,'experiment_started_at':started,'persistence':'PostgreSQL' if DATABASE_URL else DB,'markets':list(MARKETS)}

@@ -230,7 +230,7 @@ rankRows.forEach(t=>{const btn=document.createElement('button');btn.type='button
 const qo=$('quickOpen');qo.replaceChildren();
 if(!quickOpened.length)qo.textContent='Keine offenen Papertrades.';
 else quickOpened.slice(0,8).forEach(t=>{const line=document.createElement('div');line.textContent=t.market.toUpperCase()+' · '+t.strategy.toUpperCase()+' · '+t.side+' · Entry '+num(t.entry)+' · SL '+num(t.stop);qo.append(line)});
-$('quickFreshness').textContent='Nur Papertrading · '+(d.persistence==='PostgreSQL'?'PostgreSQL':'Lokale Datenbank (nicht dauerhaft gesichert)')+' · Aktualisiert '+new Date().toLocaleTimeString('de-CH')+' · Datenstand je Markt siehe Scanner';
+$('quickFreshness').textContent='NEUER TEST (alte Trades ausgeschlossen) · '+(d.experiment||'')+' · '++(d.persistence==='PostgreSQL'?'PostgreSQL':'Lokale Datenbank (nicht dauerhaft gesichert)')+' · Aktualisiert '+new Date().toLocaleTimeString('de-CH')+' · Datenstand je Markt siehe Scanner';
 const ranking=$('paperRanking');ranking.replaceChildren();
 rankRows.forEach(t=>{const tr=document.createElement('tr');const vals=[t.strategy.toUpperCase(),t.count,(100*t.wins/t.count).toFixed(1)+' %',signed(t.pnl),t.avgWin===null?'–':signed(t.avgWin),t.avgLoss===null?'–':signed(t.avgLoss),t.pf===null?'–':Number.isFinite(t.pf)?t.pf.toFixed(2):'∞',t.drawdown.toFixed(2)+' USD'];vals.forEach((v,i)=>{const cell=document.createElement('td');cell.textContent=v;if(i===3)cell.className=t.pnl>=0?'paperPos':'paperNeg';tr.append(cell)});ranking.append(tr)});
 
