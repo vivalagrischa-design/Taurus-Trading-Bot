@@ -12,12 +12,13 @@ RISK=200.0
 MAX_NOTIONAL=float(os.environ.get('TAURUS_MAX_NOTIONAL_USD','5000'))
 FEE_RATE=float(os.environ.get('TAURUS_PAPER_FEE_RATE','0.001'))
 SLIPPAGE=float(os.environ.get('TAURUS_PAPER_SLIPPAGE','0.0002'))
-MARKETS=tuple(__import__('crypto_feed').SYMBOLS)+('nq',)
+FUTURES={'nq':(2.0,1.0),'mes':(5.0,1.0),'mgc':(10.0,1.60)}  # multiplier, Lucid per-contract round-trip commission
+MARKETS=tuple(FUTURES)
 ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed','trend_pullback','trend_pullback_mtf','bb_rsi_scale')
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
-TEST_VERSION='legacy_bounce_fixed_2r_20261025_v5'
+TEST_VERSION='lucid_futures_mnq_mes_mgc_20261025_v6'
 _LOCK=threading.RLock()
 
 
@@ -157,8 +158,9 @@ def _engine_strategies(suffix):
 
 def _net_target_price(entry,side,target_usd,qty,market):
     """Raw TP trigger including exit slippage and both fees."""
-    if market=='nq':
-        exit_price=entry+(1 if side=='LONG' else -1)*(target_usd/max(qty*2,1e-9)+1.5)
+    if market in FUTURES:
+        multiplier,commission=FUTURES[market]
+        exit_price=entry+(1 if side=='LONG' else -1)*(target_usd/max(qty*multiplier,1e-9)+commission/multiplier)
     elif side=='LONG':
         exit_price=(target_usd/max(qty,1e-9)+entry*(1+FEE_RATE))/(1-FEE_RATE)
     else:
@@ -167,7 +169,7 @@ def _net_target_price(entry,side,target_usd,qty,market):
 
 
 def _add_scaled_legs(db,market,bar,suffix):
-    if suffix!='5m' or market=='nq':return
+    if suffix!='5m' or market in FUTURES:return
     open_price=float(bar['open'])
     rows=db.execute("SELECT * FROM trades WHERE market=? AND strategy='bb_rsi_scale' AND status='OPEN' AND scale_pending=1",(market,)).fetchall()
     for t in rows:
@@ -204,12 +206,13 @@ def _open_pending(db,market,bar,history,suffix):
         dist=(entry-stop if side=='LONG' else stop-entry)
         if dist<=0 or (side=='LONG' and entry>=tp) or (side=='SHORT' and entry<=tp):
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='GAP_INVALID' WHERE id=?",(t['id'],)); continue
-        if t['strategy']=='bb_rsi_scale' and market=='nq':
+        if t['strategy']=='bb_rsi_scale' and market in FUTURES:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='CRYPTO_RESEARCH_ONLY' WHERE id=?",(t['id'],));continue
-        if market=='nq':
-            risk_per_unit=abs(entry-stop)*2+3.0+2*entry*SLIPPAGE*2
+        if market in FUTURES:
+            multiplier,commission=FUTURES[market]
+            risk_per_unit=abs(entry-stop)*multiplier+commission+2*entry*SLIPPAGE*multiplier
             qty=math.floor(RISK/max(risk_per_unit,0.0001))
-            fees_est=qty*3.0
+            fees_est=qty*commission
         else:
             risk_per_unit=dist+entry*FEE_RATE+stop*FEE_RATE+entry*SLIPPAGE+stop*SLIPPAGE
             qty=min(RISK/max(risk_per_unit,0.0000001),MAX_NOTIONAL/max(entry,0.0000001))
@@ -230,9 +233,9 @@ def _open_pending(db,market,bar,history,suffix):
 
 def _net_break_even_stop(entry,side,market):
     """Raw stop trigger required for estimated zero net P/L after fill slippage and fees."""
-    if market=='nq':
-        # $3 round trip per contract; MNQ multiplier $2/point.
-        actual_exit=entry+(1.5 if side=='LONG' else -1.5)
+    if market in FUTURES:
+        multiplier,commission=FUTURES[market]
+        actual_exit=entry+(commission/multiplier if side=='LONG' else -commission/multiplier)
     elif side=='LONG':
         actual_exit=entry*(1+FEE_RATE)/(1-FEE_RATE)
     else:
@@ -244,8 +247,8 @@ def _estimated_net_at_stop(trade,stop,market):
     """Conservative projected exit P/L: exit-side slippage plus both fees."""
     side=trade['side']; entry=float(trade['entry']); qty=float(trade['qty'])
     exit_price=_slipped(float(stop),side,False)
-    gross=(exit_price-entry)*qty*(1 if side=='LONG' else -1)*(2 if market=='nq' else 1)
-    fees=(qty*3.0 if market=='nq' else (entry+exit_price)*qty*FEE_RATE)
+    gross=(exit_price-entry)*qty*(1 if side=='LONG' else -1)*(FUTURES[market][0] if market in FUTURES else 1)
+    fees=(qty*FUTURES[market][1] if market in FUTURES else (entry+exit_price)*qty*FEE_RATE)
     return round(gross-fees,4)
 
 
@@ -256,7 +259,7 @@ def _close_open(db,market,bar,suffix):
                     (market,bar['time'],*strategies)).fetchall()
     for t in rows:
         side=t['side']; stop=t['stop']; tp=t['tp']
-        multiplier=2 if market=='nq' else 1
+        multiplier=FUTURES[market][0] if market in FUTURES else 1
         direction=1 if side=='LONG' else -1
         favorable=(float(bar['high'])-float(t['entry'])) if side=='LONG' else (float(t['entry'])-float(bar['low']))
         adverse=(float(t['entry'])-float(bar['low'])) if side=='LONG' else (float(bar['high'])-float(t['entry']))
@@ -296,7 +299,7 @@ def _close_open(db,market,bar,suffix):
             raw=tp; reason='TP'
         exit_price=_slipped(raw,side,False)
         gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*(2 if market=='nq' else 1)
-        fees=(t['qty']*3.0 if market=='nq' else (t['entry']+exit_price)*t['qty']*FEE_RATE)
+        fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
         pnl=gross-fees
         db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=? WHERE id=?",
                    (bar['time'],exit_price,round(pnl,4),reason,t['id']))
