@@ -17,7 +17,7 @@ ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
-TEST_VERSION='trend_vs_scaled_mean_reversion_20261025_v4'
+TEST_VERSION='legacy_bounce_fixed_2r_20261025_v5'
 _LOCK=threading.RLock()
 
 
@@ -269,7 +269,7 @@ def _close_open(db,market,bar,suffix):
         # TP is an actual exit. If both SL and TP are touched within one OHLC
         # candle, conservatively assume SL first (intrabar order unknown).
         # Trailing decisions use the finished candle and take effect next bar.
-        if not (stop_hit or tp_hit) and t['strategy']!='bb_rsi_scale':
+        if not (stop_hit or tp_hit) and t['strategy'] not in ('bb_rsi_scale','rev_bounce'):
             initial_r=abs(float(t['entry'])-float(t['signal_stop']))
             if initial_r>0:
                 direction=1 if side=='LONG' else -1
