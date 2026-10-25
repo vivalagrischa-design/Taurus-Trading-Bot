@@ -41,3 +41,15 @@ Dann http://127.0.0.1:8000 öffnen.
 - `/api/strategies` liefert die einzelnen Strategien und historische Kandidaten. RSI+EMA und EMA20 sind **explorative Regelprototypen**, keine aus früheren Chats übernommenen validierten Modelle. ORB bleibt bewusst deaktiviert, bis Sitzungszeiten und exakte Regeln definiert sind.
 - Kein Live-Marktdatenanbieter angeschlossen; Demo/CSV werden nur im Speicher gehalten, Upload ist auf 3 MB begrenzt; Render-Neustart löscht Upload-Daten. Kein kontinuierliches Scannen, keine Trades, keine gemessenen Gewinne oder Backtests.
 - Für Live-Betrieb später: bezahlte/lizenzierte MNQ-/NQ-Daten, persistente Datenbank, laufender Prozess, Tests über getrennte Datenperioden, Gebühren, Slippage und Sicherheitskontrollen.
+
+
+## Yahoo-Forschungsmodus (v0.3)
+
+- Nach Render-Deploy im Dashboard auf **Yahoo 5M einschalten** klicken. Dann zeigt die App historische, möglicherweise verzögerte NQ=F-Kerzen von Yahoo statt der Demo.
+- Abruf maximal alle fünf Minuten pro Prozess, solange der Render-Service aktiv ist. Der Knopf **Aktualisieren** aktualisiert die Darstellung, erzwingt aber kein sofortiges Abrufen.
+- Es werden nur abgeschlossene 5-Minuten-Kerzen verwendet. Zeiten sind UTC. Yahoo kann Lücken, Änderungen, Ausfälle und verzögerte Daten liefern.
+- Falls Yahoo nicht verfügbar ist, zeigt die App ausdrücklich gekennzeichnete **Demodaten** und einen Fehlerhinweis, keine erfundenen Livekurse.
+- Bei Neustart/Schlafmodus von Render Free startet die App wieder im DEMO-Modus; Yahoo muss neu ausgewählt werden. Kein 24/7-Signalwächter oder Push-Alarm.
+- Yahoo/yfinance ist für private Forschung gedacht; Datenrechte und Nutzungsbedingungen für Veröffentlichungen beachten.
+- Strategien sind noch **experimentelle Prototypen** (Omar 1H-Trend nicht vollständig), keine geprüften Entry-Signale. NQ=F-Continuous-Kontrakt unterscheidet sich von konkreten Futures-Kontrakten.
+- Keine TradingView-MCP-Bridge und keine ChatGPT-Verbindung benötigt.

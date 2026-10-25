@@ -4,11 +4,20 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from engine import assess,demo_candles
 from strategies import evaluate
+from yahoo_feed import fetch as fetch_yahoo
 
 app=FastAPI(title='Omar Live – Dashboard',version='0.1.0')
 app.mount('/static',StaticFiles(directory='static'),name='static')
 # Demo / uploaded bars are in process memory: no durable storage, no claimed realtime feed.
 DATA={'mode':'DEMO','candles':demo_candles()}
+
+def snapshot():
+    if DATA['mode']=='YAHOO':
+        f=fetch_yahoo()
+        if f['candles']:
+            return f['candles'], 'YAHOO (VERZÖGERT)', f['error'], f['last_success']
+        return demo_candles(), 'DEMO (YAHOO NICHT VERFÜGBAR)', f['error'], f['last_success']
+    return DATA['candles'],DATA['mode'],None,None
 
 @app.get('/')
 def index():return FileResponse('static/index.html')
@@ -18,12 +27,13 @@ def health():return {'ok':True,'mode':DATA['mode']}
 
 @app.get('/api/state')
 def state():
-    out=assess(DATA['candles']);out['mode']=DATA['mode'];out['market']='NQ / MNQ';out['realtime']=False
+    bars,mode,error,updated=snapshot();out=assess(bars);out['mode']=mode;out['market']='NQ / MNQ';out['realtime']=False;out['feed_error']=error
     return out
 
 @app.get('/api/strategies')
 def strategies():
-    return {'mode':DATA['mode'],'realtime':False,'market':'NQ / MNQ','candles':DATA['candles'][-210:],'strategies':evaluate(DATA['candles']),'last_bar_time':DATA['candles'][-1]['time']}
+    bars,mode,error,updated=snapshot()
+    return {'mode':mode,'realtime':False,'market':'NQ / MNQ','candles':bars[-210:],'strategies':evaluate(bars),'last_bar_time':bars[-1]['time'],'feed_error':error,'last_fetch_time':updated,'provider':'Yahoo Finance NQ=F' if DATA['mode']=='YAHOO' else 'Lokale Daten'}
 
 @app.post('/api/upload')
 async def upload(file:UploadFile=File(...)):
@@ -60,3 +70,8 @@ async def upload(file:UploadFile=File(...)):
 def reset_demo():
     DATA.update(mode='DEMO',candles=demo_candles())
     return {'ok':True}
+
+@app.post('/api/yahoo')
+def select_yahoo():
+    DATA['mode']='YAHOO'
+    return {'ok':True,'message':'Yahoo-Modus aktiviert; verzögerte Forschungsdaten'}
