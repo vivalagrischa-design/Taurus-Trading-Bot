@@ -1,10 +1,12 @@
+# This file is reference only; update the EXISTING Render Web Service.
+# Keep a single Uvicorn worker, choose Starter or higher, configure DATABASE_URL in Environment.
 services:
   - type: web
-    name: omar-live-dashboard
+    name: taurus-trading-bot
     runtime: python
-    plan: free
+    plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION

@@ -1,15 +1,61 @@
-import csv,io,os
-from fastapi import FastAPI,File,HTTPException,UploadFile
+import csv,io,threading,logging
+from contextlib import asynccontextmanager
+from paper_engine import advance, advance_opening, summary
+from fastapi import FastAPI,File,HTTPException,UploadFile,Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from engine import assess,demo_candles
 from strategies import evaluate
-from yahoo_feed import fetch as fetch_yahoo
+from yahoo_feed import fetch as fetch_yahoo, fetch_1m as fetch_yahoo_1m
+from crypto_feed import fetch as fetch_crypto, SYMBOLS
 
-app=FastAPI(title='Taurus Trading Lab',version='0.5.0')
+_stop=threading.Event()
+last_poll={market:None for market in list(SYMBOLS)+['nq','nq_opening']}
+
+
+def paper_loop():
+    while not _stop.is_set():
+        for market in SYMBOLS:
+            try:
+                data=fetch_crypto(market)
+                if data['candles'] and not data['error']:
+                    last_poll[market]=advance(market,data['candles'])
+                else:
+                    last_poll[market]={'processed':0,'reason':data.get('error') or 'no data'}
+            except Exception as exc:
+                logging.exception('Paper poll failed for %s',market)
+                last_poll[market]={'processed':0,'reason':str(exc)[:180]}
+        try:
+            f5=fetch_yahoo()
+            if f5['candles'] and not f5['error']:
+                last_poll['nq']=advance('nq',f5['candles'])
+            else:
+                last_poll['nq']={'processed':0,'reason':f5.get('error') or 'no data'}
+            f1=fetch_yahoo_1m()
+            if f5['candles'] and f1['candles'] and not f1['error']:
+                last_poll['nq_opening']=advance_opening('nq',f1['candles'],f5['candles'])
+            else:
+                last_poll['nq_opening']={'processed':0,'reason':f1.get('error') or 'no 1m data'}
+        except Exception as exc:
+            logging.exception('Nasdaq delayed paper poll failed')
+            last_poll['nq']={'processed':0,'reason':str(exc)[:180]}
+            last_poll['nq_opening']={'processed':0,'reason':str(exc)[:180]}
+        _stop.wait(60)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    thread=threading.Thread(target=paper_loop,daemon=True,name='taurus-paper-only')
+    thread.start()
+    yield
+    _stop.set()
+    thread.join(timeout=3)
+
+
+app=FastAPI(title='Taurus Trading Lab',version='1.1.0',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory='static'),name='static')
-# Demo / uploaded bars are in process memory: no durable storage, no claimed realtime feed.
 DATA={'mode':'DEMO','candles':demo_candles()}
+
 
 def snapshot():
     if DATA['mode']=='YAHOO':
@@ -19,21 +65,65 @@ def snapshot():
         return demo_candles(), 'DEMO (YAHOO NICHT VERFÜGBAR)', f['error'], f['last_success']
     return DATA['candles'],DATA['mode'],None,None
 
+
 @app.get('/')
-def index():return FileResponse('static/index.html')
+def index():
+    return FileResponse('static/index.html')
+
 
 @app.get('/health')
-def health():return {'ok':True,'mode':DATA['mode']}
+def health():
+    return {'ok':True,'mode':DATA['mode']}
+
 
 @app.get('/api/state')
 def state():
-    bars,mode,error,updated=snapshot();out=assess(bars);out['mode']=mode;out['market']='NQ / MNQ';out['realtime']=False;out['feed_error']=error
+    bars,mode,error,updated=snapshot()
+    out=assess(bars)
+    out['mode']=mode;out['market']='NQ / MNQ';out['realtime']=False;out['feed_error']=error
     return out
 
+
 @app.get('/api/strategies')
-def strategies():
-    bars,mode,error,updated=snapshot()
-    return {'mode':mode,'realtime':False,'market':'NQ / MNQ','candles':bars[-210:],'strategies':evaluate(bars),'last_bar_time':bars[-1]['time'],'feed_error':error,'last_fetch_time':updated,'provider':'Yahoo Finance NQ=F' if DATA['mode']=='YAHOO' else 'Lokale Daten'}
+def strategies(market:str=Query('nq',pattern='^(nq|btc|eth|sol|xrp|tao|ada|avax|link|doge|sui)$')):
+    bars1m=[]
+    if market in SYMBOLS:
+        f=fetch_crypto(market)
+        bars=f['candles']
+        name=SYMBOLS[market].replace('USDT','/USDT')
+        mode='BINANCE SPOT · 5M'
+        provider='Binance Spot public klines'
+        error=f['error']
+        updated=f['last_success']
+        market_type='crypto'
+    else:
+        f=fetch_yahoo()
+        f1=fetch_yahoo_1m()
+        bars=f['candles']
+        bars1m=f1['candles']
+        name='Nasdaq NQ=F'
+        mode='YAHOO (VERZÖGERT) · 5M/1M' if bars else 'KEINE YAHOO-DATEN'
+        provider='Yahoo Finance NQ=F'
+        error=' · '.join(x for x in [f.get('error'), f1.get('error')] if x) or None
+        updated=max([x for x in [f.get('last_success'), f1.get('last_success')] if x] or [None])
+        market_type='futures'
+    if not bars:
+        return {'mode':mode,'realtime':False,'market':name,'candles_5m':[],'candles_1m':bars1m,
+                'strategies':[],'last_bar_time':None,'feed_error':error,
+                'last_fetch_time':updated,'provider':provider,'market_type':market_type}
+    evaluated=evaluate(bars,bars1m=bars1m,market=market)
+    if market!='nq':
+        for st in evaluated:
+            if st['id'] in ('opening_drop','opening_reversal','orb'):
+                continue
+            for sig in st['signals']:
+                sig['mnq_contracts']=None
+                sig['status']='KRYPTO · HISTORISCHER TESTKANDIDAT'
+    return {'mode':mode,'realtime':False,'market':name,'candles_5m':bars[-210:],'candles_1m':bars1m[-260:] if bars1m else [],
+            'strategies':evaluated,'last_bar_time':bars[-1]['time'], 'last_bar_time_1m':bars1m[-1]['time'] if bars1m else None,
+            'feed_error':error,'last_fetch_time':updated,'provider':provider,
+            'market_type':market_type}
+
 
 @app.post('/api/upload')
 async def upload(file:UploadFile=File(...)):
@@ -66,12 +156,22 @@ async def upload(file:UploadFile=File(...)):
     except (ValueError,KeyError,UnicodeError) as ex:
         raise HTTPException(400,detail=str(ex))
 
+
 @app.post('/api/demo')
 def reset_demo():
     DATA.update(mode='DEMO',candles=demo_candles())
     return {'ok':True}
 
+
 @app.post('/api/yahoo')
 def select_yahoo():
     DATA['mode']='YAHOO'
     return {'ok':True,'message':'Yahoo-Modus aktiviert; verzögerte Forschungsdaten'}
+
+
+@app.get('/api/paper')
+def paper(market:str=Query('all',pattern='^(nq|btc|eth|sol|xrp|tao|ada|avax|link|doge|sui|all)$')):
+    result=summary(None if market=='all' else market)
+    result['poll']=last_poll if market=='all' else last_poll.get(market)
+    result['delayed_nq']=(market=='nq' or market=='all')
+    return result
