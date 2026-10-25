@@ -137,20 +137,22 @@ def _close_open(db,market,bar):
         side=t['side']; stop=t['stop']; tp=t['tp']
         stop_hit=(bar['low']<=stop if side=='LONG' else bar['high']>=stop)
         tp_hit=(bar['high']>=tp if side=='LONG' else bar['low']<=tp)
-        if t['strategy'] in ACTIVE_EXTREMES:
-            # 1% is the trailing activation threshold, not a fixed take-profit.
-            tp_hit=False
-            if stop_hit:
-                pass
-            else:
-                activation=float(t['signal_tp'])
-                active=(bar['high']>=activation if side=='LONG' else bar['low']<=activation)
-                if active:
-                    # Use prior stop for this candle; only tighten for NEXT candle.
-                    trail_distance=abs(float(t['signal_entry'])-float(t['signal_stop']))
-                    candidate=bar['close']-trail_distance if side=='LONG' else bar['close']+trail_distance
+        # Profit targets are reference levels, not automatic exits.
+        # The initial stop always applies for the ENTIRE current candle.
+        # A trailing adjustment is committed only AFTER its candle closes;
+        # it is effective from the next candle (no same-bar lookahead).
+        tp_hit=False
+        if not stop_hit:
+            initial_r=abs(float(t['entry'])-float(t['signal_stop']))
+            if initial_r>0:
+                direction=1 if side=='LONG' else -1
+                favorable_close=(float(bar['close'])-float(t['entry']))*direction
+                # Arm at +1R on a confirmed close, then follow the close by 1R.
+                if favorable_close>=initial_r:
+                    candidate=float(bar['close'])-direction*initial_r
                     new_stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
-                    db.execute('UPDATE trades SET stop=? WHERE id=?',(new_stop,t['id']))
+                    if new_stop!=stop:
+                        db.execute('UPDATE trades SET stop=? WHERE id=?',(new_stop,t['id']))
         if not(stop_hit or tp_hit): continue
         if stop_hit:
             raw=min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))
