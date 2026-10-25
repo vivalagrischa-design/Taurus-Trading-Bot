@@ -60,18 +60,21 @@ def assess(bars, risk=200):
         eligible=range(max(2,i-54),i-2)
         pivots=[k for k in eligible if k+2<i and (pivot_high(bars,k) if ups else all(bars[k]['low'] < bars[t]['low'] for t in range(k-2,k+3) if t!=k))]
         if not pivots: continue
-        k=pivots[-1]
-        level=bars[k]['high'] if ups else bars[k]['low']
-        tol= max(3,level*0.00018)
-        # Breakout of historically known level in last 1..5 completed candles.
-        breaks=[]
-        for j in range(max(k+3,i-5),i):
-            if j<1:continue
-            if side=='LONG' and bars[j]['close']>level+tol and bars[j-1]['close']<=level+tol:breaks.append(j)
-            if side=='SHORT' and bars[j]['close']<level-tol and bars[j-1]['close']>=level-tol:breaks.append(j)
-        if not breaks:continue
-        bidx=breaks[-1]
-        if bidx>=i:continue
+        # Re-evaluate all confirmed pivots, using only candles known at this point.
+        candidates=[]
+        for k in pivots:
+            level=bars[k]['high'] if ups else bars[k]['low']
+            tol=max(3,abs(level)*0.00018)
+            for j in range(max(k+3,i-5),i):
+                if j<1: continue
+                previous=bars[j-1]['close']
+                current_break=bars[j]['close']
+                crossed=(previous<=level+tol and current_break>level+tol) if ups else (previous>=level-tol and current_break<level-tol)
+                if crossed:
+                    candidates.append((j,k,level,tol))
+        if not candidates: continue
+        bidx,k,level,tol=max(candidates,key=lambda item:(item[0],-abs(current['close']-item[2])))
+        if bidx>=i: continue
         # Retest touches level and candle closes on correct side.
         touch=(current['low']<=level+tol if ups else current['high']>=level-tol)
         valid=(current['close']>level if ups else current['close']<level)
@@ -89,4 +92,4 @@ def assess(bars, risk=200):
             last_stage='SIGNAL BESTÄTIGT';stage_time=current['time']
         else:
             last_stage='RETEST WIRD GEPRÜFT';stage_time=current['time']
-    return {'stage':last_stage,'stage_time':stage_time,'level':last_level,'signals':events[-25:][::-1],'candles':bars[-210:],'last_bar_time':bars[-1]['time'],'risk_usd':risk}
+    return {'stage':last_stage,'stage_time':stage_time,'level':last_level,'signals':events[::-1],'candles':bars[-210:],'last_bar_time':bars[-1]['time'],'risk_usd':risk}
