@@ -246,4 +246,6 @@ def evaluate(bars, bars1m=None, market='nq'):
     from reversal import build as reversal_build
     result.extend(reversal_build(bars))
     result.extend(_simple_repetitive(bars,market))
+    from trend_pullback_mtf import build as trend_mtf_build
+    result.append(trend_mtf_build(bars))
     return result
