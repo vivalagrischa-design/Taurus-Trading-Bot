@@ -220,7 +220,7 @@ const rankRows=Object.entries(d.summary||{}).map(([strategy])=>{
  let capital=0,peak=0,drawdown=0;
  rows.forEach(t=>{capital+=t.pnl;peak=Math.max(peak,capital);drawdown=Math.max(drawdown,peak-capital)});
  return {strategy,count:rows.length,wins:pos.length,pnl:gain-loss,avgWin:pos.length?gain/pos.length:null,avgLoss:neg.length?-loss/neg.length:null,pf:loss?gain/loss:(gain?Infinity:null),drawdown};
-}).filter(t=>t.count).sort((a,b)=>b.pnl-a.pnl);
+}).sort((a,b)=>b.pnl-a.pnl);
 const poll=d.poll||{};
 const states=Object.entries(poll).filter(([market])=>!market.endsWith('_1m')&&!market.endsWith('_opening')&&!market.endsWith('_bb')).map(([market,entry])=>{
  const reason=String(entry?.reason||'');
@@ -247,7 +247,7 @@ const quickPnL=quickClosed.reduce((v,t)=>v+t.pnl,0),quickWins=quickClosed.filter
 const quickMetrics=$('quickMetrics');quickMetrics.replaceChildren();
 [['Netto realisiert',signed(quickPnL)],['Trefferquote',quickClosed.length?(100*quickWins/quickClosed.length).toFixed(1)+' %':'–'],['Trades geschlossen',quickClosed.length],['Positionen offen',quickOpened.length]].forEach(([name,value],i)=>{const box=document.createElement('div');box.className='quickMetric';const label=document.createElement('span');label.textContent=name;const num=document.createElement('strong');num.textContent=value;if(i===0)num.className=quickPnL>=0?'paperPos':'paperNeg';box.append(label,num);quickMetrics.append(box)});
 const qs=$('quickStrategies');qs.replaceChildren();
-rankRows.forEach(t=>{const btn=document.createElement('button');btn.type='button';btn.className='quickStrat';const name=document.createElement('b');name.textContent=t.strategy.toUpperCase();const pnl=document.createElement('strong');pnl.textContent=signed(t.pnl);pnl.className=t.pnl>=0?'paperPos':'paperNeg';const small=document.createElement('small');small.textContent=t.count+' Trades · '+(100*t.wins/t.count).toFixed(0)+' % Treffer';btn.append(name,pnl,small);btn.addEventListener('click',()=>{const target=document.querySelector('[data-tab="'+t.strategy+'"]');if(target){target.click()}document.getElementById('paperPanel').scrollIntoView({behavior:'smooth'})});qs.append(btn)});
+rankRows.forEach(t=>{const btn=document.createElement('button');btn.type='button';btn.className='quickStrat';const name=document.createElement('b');name.textContent=t.strategy.toUpperCase();const pnl=document.createElement('strong');pnl.textContent=signed(t.pnl);pnl.className=t.pnl>=0?'paperPos':'paperNeg';const small=document.createElement('small');small.textContent=t.count+' Trades · '+(t.count?(100*t.wins/t.count).toFixed(0)+' % Treffer':'noch keine Trefferquote');btn.append(name,pnl,small);btn.addEventListener('click',()=>{const target=document.querySelector('[data-tab="'+t.strategy+'"]');if(target){target.click()}document.getElementById('paperPanel').scrollIntoView({behavior:'smooth'})});qs.append(btn)});
 const qo=$('quickOpen');qo.replaceChildren();
 if(!quickOpened.length)qo.textContent='Keine offenen Papertrades.';
 else quickOpened.slice(0,8).forEach(t=>{const line=document.createElement('div');line.textContent=t.market.toUpperCase()+' · '+t.strategy.toUpperCase()+' · '+t.side+' · Entry '+num(t.entry)+' · SL '+num(t.stop);qo.append(line)});
