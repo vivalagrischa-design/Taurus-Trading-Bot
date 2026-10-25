@@ -17,7 +17,7 @@ ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
-TEST_VERSION='bb_abc_trailing_20261025_v1'
+TEST_VERSION='tp_trailing_execution_fixed_20261025_v2'
 _LOCK=threading.RLock()
 
 
@@ -73,7 +73,8 @@ def init_extra(db):
     cols={'mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION',
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
-          'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER'}
+          'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
@@ -150,8 +151,15 @@ def _entry_indicators(history):
     return (position,round(pct,4),round(rsi,2))
 
 
-def _open_pending(db,market,bar,history):
-    pending=db.execute("SELECT * FROM trades WHERE market=? AND status='PENDING' AND signal_time<?",(market,bar['time'])).fetchall()
+def _engine_strategies(suffix):
+    return ACTIVE_5M if suffix=='5m' else ACTIVE_1M if suffix=='1m' else ACTIVE_EXTREMES
+
+
+def _open_pending(db,market,bar,history,suffix):
+    strategies=_engine_strategies(suffix)
+    marks=','.join('?' for _ in strategies)
+    pending=db.execute("SELECT * FROM trades WHERE market=? AND status='PENDING' AND signal_time<? AND strategy IN ("+marks+")",
+                       (market,bar['time'],*strategies)).fetchall()
     for t in pending:
         side=t['side']; entry=_slipped(float(bar['open']),side,True); stop=float(t['signal_stop']); tp=float(t['signal_tp'])
         dist=(entry-stop if side=='LONG' else stop-entry)
@@ -170,12 +178,38 @@ def _open_pending(db,market,bar,history):
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
         bbpos,pct,rsi=_entry_indicators(history)
-        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0 WHERE id=?",
-                   (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,t['id']))
+        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=? WHERE id=?",
+                   (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
+                    _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
+                    _net_break_even_stop(entry,side,market),t['id']))
 
 
-def _close_open(db,market,bar):
-    rows=db.execute("SELECT * FROM trades WHERE market=? AND status='OPEN' AND entry_time<=?",(market,bar['time'])).fetchall()
+def _net_break_even_stop(entry,side,market):
+    """Raw stop trigger required for estimated zero net P/L after fill slippage and fees."""
+    if market=='nq':
+        # $3 round trip per contract; MNQ multiplier $2/point.
+        actual_exit=entry+(1.5 if side=='LONG' else -1.5)
+    elif side=='LONG':
+        actual_exit=entry*(1+FEE_RATE)/(1-FEE_RATE)
+    else:
+        actual_exit=entry*(1-FEE_RATE)/(1+FEE_RATE)
+    return actual_exit/(1-SLIPPAGE if side=='LONG' else 1+SLIPPAGE)
+
+
+def _estimated_net_at_stop(trade,stop,market):
+    """Conservative projected exit P/L: exit-side slippage plus both fees."""
+    side=trade['side']; entry=float(trade['entry']); qty=float(trade['qty'])
+    exit_price=_slipped(float(stop),side,False)
+    gross=(exit_price-entry)*qty*(1 if side=='LONG' else -1)*(2 if market=='nq' else 1)
+    fees=(qty*3.0 if market=='nq' else (entry+exit_price)*qty*FEE_RATE)
+    return round(gross-fees,4)
+
+
+def _close_open(db,market,bar,suffix):
+    strategies=_engine_strategies(suffix)
+    marks=','.join('?' for _ in strategies)
+    rows=db.execute("SELECT * FROM trades WHERE market=? AND status='OPEN' AND entry_time<=? AND strategy IN ("+marks+")",
+                    (market,bar['time'],*strategies)).fetchall()
     for t in rows:
         side=t['side']; stop=t['stop']; tp=t['tp']
         multiplier=2 if market=='nq' else 1
@@ -188,12 +222,10 @@ def _close_open(db,market,bar):
         db.execute('UPDATE trades SET mfe_usd=?,mae_usd=? WHERE id=?',(round(mfe,4),round(mae,4),t['id']))
         stop_hit=(bar['low']<=stop if side=='LONG' else bar['high']>=stop)
         tp_hit=(bar['high']>=tp if side=='LONG' else bar['low']<=tp)
-        # Profit targets are reference levels, not automatic exits.
-        # The initial stop always applies for the ENTIRE current candle.
-        # A trailing adjustment is committed only AFTER its candle closes;
-        # it is effective from the next candle (no same-bar lookahead).
-        tp_hit=False
-        if not stop_hit:
+        # TP is an actual exit. If both SL and TP are touched within one OHLC
+        # candle, conservatively assume SL first (intrabar order unknown).
+        # Trailing decisions use the finished candle and take effect next bar.
+        if not (stop_hit or tp_hit):
             initial_r=abs(float(t['entry'])-float(t['signal_stop']))
             if initial_r>0:
                 direction=1 if side=='LONG' else -1
@@ -203,7 +235,10 @@ def _close_open(db,market,bar):
                     candidate=float(bar['close'])-direction*initial_r
                     new_stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
                     if new_stop!=stop:
-                        db.execute('UPDATE trades SET stop=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(new_stop,t['id']))
+                        net_at_stop=_estimated_net_at_stop(t,new_stop,market)
+                        # Preserve protective trailing even before break-even;
+                        # distinguish gross locked profit from after-cost result.
+                        db.execute('UPDATE trades SET stop=?,stop_net_estimate=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(new_stop,net_at_stop,t['id']))
         if not(stop_hit or tp_hit): continue
         if stop_hit:
             raw=min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))
@@ -238,7 +273,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
             pending=[(i,b) for i,b in enumerate(bars) if b['time']>last_seen]
             if not pending: return {'processed':0,'reason':'no new complete candle'}
             if pending[0][1]['time']>last_seen+step:
-                db.execute("UPDATE trades SET status='UNKNOWN',exit_reason='DATA_GAP' WHERE market=? AND status IN ('OPEN','PENDING')",(market,))
+                db.execute("UPDATE trades SET status='UNKNOWN',exit_reason='DATA_GAP' WHERE market=? AND strategy IN ("+','.join('?' for _ in _engine_strategies(suffix))+") AND status IN ('OPEN','PENDING')",(market,*_engine_strategies(suffix)))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(last,key))
                 return {'processed':0,'reason':'data gap; open trades marked UNKNOWN'}
             count=0
@@ -246,8 +281,8 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
             for i,b in pending:
                 if i<warmup:
                     db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key)); continue
-                _open_pending(db,market,b,bars[:i])
-                _close_open(db,market,b)
+                _open_pending(db,market,b,bars[:i],suffix)
+                _close_open(db,market,b,suffix)
                 for strategy,sig in signal_lookup(i):
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
