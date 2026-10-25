@@ -89,7 +89,191 @@ def state():
 
 
 @app.get('/api/strategies')
-def strategies(market:str=Query('nq',pattern='^[a-z0-9]{1,16})):
+def strategies(market:str=Query('nq',pattern='^[a-z0-9]{1,16}
+    bars1m=[]
+    if market in SYMBOLS:
+        f=fetch_crypto(market)
+        bars=f['candles']
+        f1=fetch_crypto_1m(market)
+        bars1m=f1['candles']
+        name=SYMBOLS[market].replace('USDT','/USDT')
+        mode='BINANCE SPOT · 5M/1M'
+        provider='Binance Spot public klines'
+        error=' · '.join(x for x in (f['error'],f1['error']) if x) or None
+        updated=f['last_success']
+        market_type='crypto'
+    else:
+        f=fetch_yahoo()
+        f1=fetch_yahoo_1m()
+        bars=f['candles']
+        bars1m=f1['candles']
+        name='Nasdaq NQ=F'
+        mode='YAHOO (VERZÖGERT) · 5M/1M' if bars else 'KEINE YAHOO-DATEN'
+        provider='Yahoo Finance NQ=F'
+        error=' · '.join(x for x in [f.get('error'), f1.get('error')] if x) or None
+        updated=max([x for x in [f.get('last_success'), f1.get('last_success')] if x] or [None])
+        market_type='futures'
+    if not bars:
+        return {'mode':mode,'realtime':False,'market':name,'candles_5m':[],'candles_1m':bars1m,
+                'strategies':[],'last_bar_time':None,'feed_error':error,
+                'last_fetch_time':updated,'provider':provider,'market_type':market_type}
+    evaluated=evaluate(bars,bars1m=bars1m,market=market)
+    if market!='nq':
+        for st in evaluated:
+            if st['id'] in ('opening_drop','opening_reversal','orb'):
+                continue
+            for sig in st['signals']:
+                sig['mnq_contracts']=None
+                sig['status']='KRYPTO · HISTORISCHER TESTKANDIDAT'
+    return {'mode':mode,'realtime':False,'market':name,'candles_5m':bars[-210:],'candles_1m':bars1m[-260:] if bars1m else [],
+            'strategies':evaluated,'last_bar_time':bars[-1]['time'], 'last_bar_time_1m':bars1m[-1]['time'] if bars1m else None,
+            'feed_error':error,'last_fetch_time':updated,'provider':provider,
+            'market_type':market_type}
+
+
+@app.post('/api/upload')
+async def upload(file:UploadFile=File(...)):
+    raw=await file.read(3_000_001)
+    if len(raw)>3_000_000:raise HTTPException(413,'Datei zu gross (max. 3 MB)')
+    try:
+        rows=list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
+        if len(rows)>5000:raise ValueError('Maximal 5000 Kerzen')
+        items=[]
+        for r in rows:
+            t=(r.get('time') or r.get('timestamp') or r.get('datetime') or '').strip()
+            if not t:raise ValueError('Spalte time/timestamp/datetime fehlt')
+            if t.isdigit():stamp=int(t);stamp=stamp//1000 if stamp>10**11 else stamp
+            else:
+                from datetime import datetime,timezone
+                dt=datetime.fromisoformat(t.replace('Z','+00:00'))
+                if dt.tzinfo is None:raise ValueError('Zeitstempel benötigen UTC-Zone, z.B. +00:00')
+                stamp=int(dt.astimezone(timezone.utc).timestamp())
+            b={'time':stamp}
+            for k in ('open','high','low','close'):
+                b[k]=float(r[k])
+            b['volume']=float(r.get('volume') or 0)
+            if not (b['low']<=min(b['open'],b['close'])<=max(b['open'],b['close'])<=b['high']):raise ValueError('Ungültige OHLC-Zeile')
+            items.append(b)
+        items.sort(key=lambda x:x['time'])
+        if len(items)<75 or any(items[i]['time']==items[i-1]['time'] for i in range(1,len(items))):raise ValueError('Mindestens 75 eindeutige 5M-Kerzen erforderlich')
+        if any(items[i]['time']-items[i-1]['time']!=300 for i in range(1,len(items))):raise ValueError('Demo benötigt lückenlose 5-Minuten-Kerzen (keine Overnight-/Wochenend-Lücken)')
+        DATA.update(mode='CSV-IMPORT',candles=items)
+        return {'ok':True,'count':len(items)}
+    except (ValueError,KeyError,UnicodeError) as ex:
+        raise HTTPException(400,detail=str(ex))
+
+
+@app.post('/api/demo')
+def reset_demo():
+    DATA.update(mode='DEMO',candles=demo_candles())
+    return {'ok':True}
+
+
+@app.post('/api/yahoo')
+def select_yahoo():
+    DATA['mode']='YAHOO'
+    return {'ok':True,'message':'Yahoo-Modus aktiviert; verzögerte Forschungsdaten'}
+
+
+@app.get('/api/paper')
+def paper(market:str=Query('all',pattern='^(nq|btc|eth|sol|xrp|tao|ada|avax|link|doge|sui|all)$')):
+    result=summary(None if market=='all' else market)
+    result['poll']=last_poll if market=='all' else last_poll.get(market)
+    result['delayed_nq']=(market=='nq' or market=='all')
+    return result
+)):
+    bars1m=[]
+    if market in SYMBOLS:
+        f=fetch_crypto(market)
+        bars=f['candles']
+        f1=fetch_crypto_1m(market)
+        bars1m=f1['candles']
+        name=SYMBOLS[market].replace('USDT','/USDT')
+        mode='BINANCE SPOT · 5M/1M'
+        provider='Binance Spot public klines'
+        error=' · '.join(x for x in (f['error'],f1['error']) if x) or None
+        updated=f['last_success']
+        market_type='crypto'
+    else:
+        f=fetch_yahoo()
+        f1=fetch_yahoo_1m()
+        bars=f['candles']
+        bars1m=f1['candles']
+        name='Nasdaq NQ=F'
+        mode='YAHOO (VERZÖGERT) · 5M/1M' if bars else 'KEINE YAHOO-DATEN'
+        provider='Yahoo Finance NQ=F'
+        error=' · '.join(x for x in [f.get('error'), f1.get('error')] if x) or None
+        updated=max([x for x in [f.get('last_success'), f1.get('last_success')] if x] or [None])
+        market_type='futures'
+    if not bars:
+        return {'mode':mode,'realtime':False,'market':name,'candles_5m':[],'candles_1m':bars1m,
+                'strategies':[],'last_bar_time':None,'feed_error':error,
+                'last_fetch_time':updated,'provider':provider,'market_type':market_type}
+    evaluated=evaluate(bars,bars1m=bars1m,market=market)
+    if market!='nq':
+        for st in evaluated:
+            if st['id'] in ('opening_drop','opening_reversal','orb'):
+                continue
+            for sig in st['signals']:
+                sig['mnq_contracts']=None
+                sig['status']='KRYPTO · HISTORISCHER TESTKANDIDAT'
+    return {'mode':mode,'realtime':False,'market':name,'candles_5m':bars[-210:],'candles_1m':bars1m[-260:] if bars1m else [],
+            'strategies':evaluated,'last_bar_time':bars[-1]['time'], 'last_bar_time_1m':bars1m[-1]['time'] if bars1m else None,
+            'feed_error':error,'last_fetch_time':updated,'provider':provider,
+            'market_type':market_type}
+
+
+@app.post('/api/upload')
+async def upload(file:UploadFile=File(...)):
+    raw=await file.read(3_000_001)
+    if len(raw)>3_000_000:raise HTTPException(413,'Datei zu gross (max. 3 MB)')
+    try:
+        rows=list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
+        if len(rows)>5000:raise ValueError('Maximal 5000 Kerzen')
+        items=[]
+        for r in rows:
+            t=(r.get('time') or r.get('timestamp') or r.get('datetime') or '').strip()
+            if not t:raise ValueError('Spalte time/timestamp/datetime fehlt')
+            if t.isdigit():stamp=int(t);stamp=stamp//1000 if stamp>10**11 else stamp
+            else:
+                from datetime import datetime,timezone
+                dt=datetime.fromisoformat(t.replace('Z','+00:00'))
+                if dt.tzinfo is None:raise ValueError('Zeitstempel benötigen UTC-Zone, z.B. +00:00')
+                stamp=int(dt.astimezone(timezone.utc).timestamp())
+            b={'time':stamp}
+            for k in ('open','high','low','close'):
+                b[k]=float(r[k])
+            b['volume']=float(r.get('volume') or 0)
+            if not (b['low']<=min(b['open'],b['close'])<=max(b['open'],b['close'])<=b['high']):raise ValueError('Ungültige OHLC-Zeile')
+            items.append(b)
+        items.sort(key=lambda x:x['time'])
+        if len(items)<75 or any(items[i]['time']==items[i-1]['time'] for i in range(1,len(items))):raise ValueError('Mindestens 75 eindeutige 5M-Kerzen erforderlich')
+        if any(items[i]['time']-items[i-1]['time']!=300 for i in range(1,len(items))):raise ValueError('Demo benötigt lückenlose 5-Minuten-Kerzen (keine Overnight-/Wochenend-Lücken)')
+        DATA.update(mode='CSV-IMPORT',candles=items)
+        return {'ok':True,'count':len(items)}
+    except (ValueError,KeyError,UnicodeError) as ex:
+        raise HTTPException(400,detail=str(ex))
+
+
+@app.post('/api/demo')
+def reset_demo():
+    DATA.update(mode='DEMO',candles=demo_candles())
+    return {'ok':True}
+
+
+@app.post('/api/yahoo')
+def select_yahoo():
+    DATA['mode']='YAHOO'
+    return {'ok':True,'message':'Yahoo-Modus aktiviert; verzögerte Forschungsdaten'}
+
+
+@app.get('/api/paper')
+def paper(market:str=Query('all',pattern='^(nq|btc|eth|sol|xrp|tao|ada|avax|link|doge|sui|all)$')):
+    result=summary(None if market=='all' else market)
+    result['poll']=last_poll if market=='all' else last_poll.get(market)
+    result['delayed_nq']=(market=='nq' or market=='all')
+    return result
+)):
     bars1m=[]
     if market in SYMBOLS:
         f=fetch_crypto(market)
