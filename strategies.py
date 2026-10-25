@@ -53,7 +53,7 @@ def signal_with_params(id,side,time,entry,stop,tp,reason,level=None,breakout_tim
 
 
 def tile(id,name,state,details,signals,checks):
-    return dict(id=id,name=name,state=state,details=details,signals=signals[-25:][::-1],checks=checks)
+    return dict(id=id,name=name,state=state,details=details,signals=signals[::-1],checks=checks)
 
 
 def _ny_dt(ts):
