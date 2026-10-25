@@ -4,10 +4,12 @@ from strategies import tile, signal_with_params
 
 PATTERNS=(('rev_exhaustion','Exhaustion'),('rev_engulfing','Engulfing'),('rev_pinbar','Pin Bar'),('rev_bounce','Level Bounce'))
 
+CONFIRMED=tuple((key+'_confirmed',name+' Trend+BB') for key,name in PATTERNS)
+
 def build(bars):
-    found={key:[] for key,_ in PATTERNS}
+    found={key:[] for key,_ in PATTERNS+CONFIRMED}
     if len(bars)<40:
-        return [tile(key,name,'neutral','Mindestens 40 abgeschlossene 5M-Kerzen benötigt',[],[]) for key,name in PATTERNS]
+        return [tile(key,name,'neutral','Mindestens 40 abgeschlossene 5M-Kerzen benötigt',[],[]) for key,name in PATTERNS+CONFIRMED]
     for i in range(25,len(bars)):
         b=bars[i];p=bars[i-1]; prev=bars[i-5:i]; hist=bars[i-24:i-1]
         span=max(b['high']-b['low'],b['close']*.00001)
@@ -33,4 +35,18 @@ def build(bars):
             risk=abs(entry-stop);tp=entry+2*risk if side=='LONG' else entry-2*risk
             sig=signal_with_params(key,side,b['time'],entry,stop,tp,reason,stop,timeframe='5m')
             found[key].append(sig)
-    return [tile(key,name,'green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral','5M-Umkehrmuster · Entry nächste Kerze · SL am Swing · TP 2R',found[key],[('Signal letzte Kerze','green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral')]) for key,name in PATTERNS]
+            # Independent stricter test; only information available on this closed bar.
+            prior=bars[i-20:i]
+            center=sum(float(x['close']) for x in prior)/20
+            deviation=(sum((float(x['close'])-center)**2 for x in prior)/20)**.5
+            upper=center+2*deviation
+            lower=center-2*deviation
+            directional=(down_run if side=='LONG' else up_run)
+            at_extreme=(b['low']<=lower+(center-lower)*.25 if side=='LONG'
+                        else b['high']>=upper-(upper-center)*.25)
+            confirming=(b['close']>b['open'] if side=='LONG' else b['close']<b['open'])
+            if deviation>0 and directional and at_extreme and confirming:
+                found[key+'_confirmed'].append(signal_with_params(
+                    key+'_confirmed',side,b['time'],entry,stop,tp,
+                    reason+' | prior trend + BB20 edge + confirmed reversal',stop,timeframe='5m'))
+    return [tile(key,name,'green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral','5M-Umkehrmuster · Entry nächste Kerze · SL am Swing · TP 2R',found[key],[('Signal letzte Kerze','green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral')]) for key,name in PATTERNS+CONFIRMED]
