@@ -13,11 +13,11 @@ MAX_NOTIONAL=float(os.environ.get('TAURUS_MAX_NOTIONAL_USD','5000'))
 FEE_RATE=float(os.environ.get('TAURUS_PAPER_FEE_RATE','0.001'))
 SLIPPAGE=float(os.environ.get('TAURUS_PAPER_SLIPPAGE','0.0002'))
 MARKETS=tuple(__import__('crypto_feed').SYMBOLS)+('nq',)
-ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed')
+ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed','trend_pullback','bb_rsi_scale')
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
-TEST_VERSION='reversal_trend_bb_comparison_20261025_v3'
+TEST_VERSION='trend_vs_scaled_mean_reversion_20261025_v4'
 _LOCK=threading.RLock()
 
 
@@ -74,7 +74,7 @@ def init_extra(db):
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
           'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
-          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION'}
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
@@ -155,6 +155,42 @@ def _engine_strategies(suffix):
     return ACTIVE_5M if suffix=='5m' else ACTIVE_1M if suffix=='1m' else ACTIVE_EXTREMES
 
 
+def _net_target_price(entry,side,target_usd,qty,market):
+    """Raw TP trigger including exit slippage and both fees."""
+    if market=='nq':
+        exit_price=entry+(1 if side=='LONG' else -1)*(target_usd/max(qty*2,1e-9)+1.5)
+    elif side=='LONG':
+        exit_price=(target_usd/max(qty,1e-9)+entry*(1+FEE_RATE))/(1-FEE_RATE)
+    else:
+        exit_price=(entry*(1-FEE_RATE)-target_usd/max(qty,1e-9))/(1+FEE_RATE)
+    return exit_price/(1-SLIPPAGE if side=='LONG' else 1+SLIPPAGE)
+
+
+def _add_scaled_legs(db,market,bar,suffix):
+    if suffix!='5m' or market=='nq':return
+    open_price=float(bar['open'])
+    rows=db.execute("SELECT * FROM trades WHERE market=? AND strategy='bb_rsi_scale' AND status='OPEN' AND scale_pending=1",(market,)).fetchall()
+    for t in rows:
+        side=t['side'];old_qty=float(t['qty']);old_entry=float(t['entry'])
+        stop=float(t['initial_stop'])
+        # Do not increase a losing position when the current open has already breached SL.
+        if (side=='SHORT' and open_price>=stop) or (side=='LONG' and open_price<=stop):
+            db.execute("UPDATE trades SET scale_pending=0 WHERE id=?",(t['id'],));continue
+        fill=_slipped(open_price,side,True)
+        budget=max(0,MAX_NOTIONAL/3)
+        add_qty=math.floor(min(budget/max(fill,1e-12),max(0,MAX_NOTIONAL-old_qty*old_entry)/max(fill,1e-12))*1e6)/1e6
+        if add_qty<=0:
+            db.execute("UPDATE trades SET scale_pending=0 WHERE id=?",(t['id'],));continue
+        new_qty=old_qty+add_qty;average=(old_entry*old_qty+fill*add_qty)/new_qty
+        possible_loss=_estimated_net_at_stop({'side':side,'entry':average,'qty':new_qty},stop,market)
+        if possible_loss < -RISK:
+            db.execute("UPDATE trades SET scale_pending=0 WHERE id=?",(t['id'],));continue
+        tp=_net_target_price(average,side,25,new_qty,market)
+        db.execute("UPDATE trades SET qty=?,entry=?,tp=?,cost_estimate=?,risk_plan=?,scale_legs=COALESCE(scale_legs,1)+1,scale_pending=0,last_leg_price=?,break_even_stop=?,stop_net_estimate=? WHERE id=?",
+            (new_qty,average,tp,(average+stop)*new_qty*FEE_RATE,abs(min(0,possible_loss)),fill,
+             _net_break_even_stop(average,side,market),possible_loss,t['id']))
+
+
 def _open_pending(db,market,bar,history,suffix):
     strategies=_engine_strategies(suffix)
     marks=','.join('?' for _ in strategies)
@@ -165,6 +201,8 @@ def _open_pending(db,market,bar,history,suffix):
         dist=(entry-stop if side=='LONG' else stop-entry)
         if dist<=0 or (side=='LONG' and entry>=tp) or (side=='SHORT' and entry<=tp):
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='GAP_INVALID' WHERE id=?",(t['id'],)); continue
+        if t['strategy']=='bb_rsi_scale' and market=='nq':
+            db.execute("UPDATE trades SET status='CANCELLED',exit_reason='CRYPTO_RESEARCH_ONLY' WHERE id=?",(t['id'],));continue
         if market=='nq':
             risk_per_unit=abs(entry-stop)*2+3.0+2*entry*SLIPPAGE*2
             qty=math.floor(RISK/max(risk_per_unit,0.0001))
@@ -174,14 +212,17 @@ def _open_pending(db,market,bar,history,suffix):
             qty=min(RISK/max(risk_per_unit,0.0000001),MAX_NOTIONAL/max(entry,0.0000001))
             qty=math.floor(qty*1e6)/1e6
             fees_est=qty*(entry+stop)*FEE_RATE
+        if t['strategy']=='bb_rsi_scale':
+            qty=min(qty,math.floor((MAX_NOTIONAL/3)/max(entry,1e-12)*1e6)/1e6)
+            tp=_net_target_price(entry,side,25,qty,market) if qty>0 else tp
         risk_plan=qty*risk_per_unit
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
         bbpos,pct,rsi=_entry_indicators(history)
-        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=? WHERE id=?",
+        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=? WHERE id=?",
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
                     _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
-                    _net_break_even_stop(entry,side,market),t['id']))
+                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,t['id']))
 
 
 def _net_break_even_stop(entry,side,market):
@@ -239,6 +280,11 @@ def _close_open(db,market,bar,suffix):
                         # Preserve protective trailing even before break-even;
                         # distinguish gross locked profit from after-cost result.
                         db.execute('UPDATE trades SET stop=?,stop_net_estimate=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(new_stop,net_at_stop,t['id']))
+        if not(stop_hit or tp_hit) and t['strategy']=='bb_rsi_scale' and int(t['scale_legs'] or 1)<3 and not int(t['scale_pending'] or 0):
+            last_leg=float(t['last_leg_price'] or t['entry'])
+            adverse_against_last=(float(bar['close'])/last_leg-1) if side=='SHORT' else (1-float(bar['close'])/last_leg)
+            if adverse_against_last>=.003:
+                db.execute("UPDATE trades SET scale_pending=1 WHERE id=?",(t['id'],))
         if not(stop_hit or tp_hit): continue
         if stop_hit:
             raw=min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))
@@ -281,6 +327,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
             for i,b in pending:
                 if i<warmup:
                     db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key)); continue
+                _add_scaled_legs(db,market,b,suffix)
                 _open_pending(db,market,b,bars[:i],suffix)
                 _close_open(db,market,b,suffix)
                 for strategy,sig in signal_lookup(i):
