@@ -151,8 +151,15 @@ def _entry_indicators(history):
     return (position,round(pct,4),round(rsi,2))
 
 
-def _open_pending(db,market,bar,history):
-    pending=db.execute("SELECT * FROM trades WHERE market=? AND status='PENDING' AND signal_time<?",(market,bar['time'])).fetchall()
+def _engine_strategies(suffix):
+    return ACTIVE_5M if suffix=='5m' else ACTIVE_1M if suffix=='1m' else ACTIVE_EXTREMES
+
+
+def _open_pending(db,market,bar,history,suffix):
+    strategies=_engine_strategies(suffix)
+    marks=','.join('?' for _ in strategies)
+    pending=db.execute("SELECT * FROM trades WHERE market=? AND status='PENDING' AND signal_time<? AND strategy IN ("+marks+")",
+                       (market,bar['time'],*strategies)).fetchall()
     for t in pending:
         side=t['side']; entry=_slipped(float(bar['open']),side,True); stop=float(t['signal_stop']); tp=float(t['signal_tp'])
         dist=(entry-stop if side=='LONG' else stop-entry)
@@ -198,8 +205,11 @@ def _estimated_net_at_stop(trade,stop,market):
     return round(gross-fees,4)
 
 
-def _close_open(db,market,bar):
-    rows=db.execute("SELECT * FROM trades WHERE market=? AND status='OPEN' AND entry_time<=?",(market,bar['time'])).fetchall()
+def _close_open(db,market,bar,suffix):
+    strategies=_engine_strategies(suffix)
+    marks=','.join('?' for _ in strategies)
+    rows=db.execute("SELECT * FROM trades WHERE market=? AND status='OPEN' AND entry_time<=? AND strategy IN ("+marks+")",
+                    (market,bar['time'],*strategies)).fetchall()
     for t in rows:
         side=t['side']; stop=t['stop']; tp=t['tp']
         multiplier=2 if market=='nq' else 1
@@ -273,8 +283,8 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
             for i,b in pending:
                 if i<warmup:
                     db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key)); continue
-                _open_pending(db,market,b,bars[:i])
-                _close_open(db,market,b)
+                _open_pending(db,market,b,bars[:i],suffix)
+                _close_open(db,market,b,suffix)
                 for strategy,sig in signal_lookup(i):
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
