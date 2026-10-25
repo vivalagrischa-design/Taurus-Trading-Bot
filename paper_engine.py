@@ -12,9 +12,10 @@ MAX_NOTIONAL=float(os.environ.get('TAURUS_MAX_NOTIONAL_USD','5000'))
 FEE_RATE=float(os.environ.get('TAURUS_PAPER_FEE_RATE','0.001'))
 SLIPPAGE=float(os.environ.get('TAURUS_PAPER_SLIPPAGE','0.0002'))
 MARKETS=tuple(__import__('crypto_feed').SYMBOLS)+('nq',)
-ACTIVE_5M=('omar','rsi_ema','ema20','orb')
+ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce')
 ACTIVE_1M=('opening_drop','opening_reversal')
-ALL_STRATS=ACTIVE_5M+ACTIVE_1M
+ACTIVE_EXTREMES=('bb_rsi_short','bb_rsi_long')
+ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
 _LOCK=threading.RLock()
 
 
@@ -102,6 +103,11 @@ def _signals_for_last_1m(market,bars1m,bars5m):
     return out
 
 
+def _signals_for_last_extremes(market,bars1m,bars5m):
+    from bb_rsi import build
+    return [(st['id'],sig) for st in build(bars1m) if st['id'] in ACTIVE_EXTREMES for sig in st['signals'] if sig['time']==bars1m[-1]['time']]
+
+
 def _open_pending(db,market,bar):
     pending=db.execute("SELECT * FROM trades WHERE market=? AND status='PENDING' AND signal_time<?",(market,bar['time'])).fetchall()
     for t in pending:
@@ -131,6 +137,20 @@ def _close_open(db,market,bar):
         side=t['side']; stop=t['stop']; tp=t['tp']
         stop_hit=(bar['low']<=stop if side=='LONG' else bar['high']>=stop)
         tp_hit=(bar['high']>=tp if side=='LONG' else bar['low']<=tp)
+        if t['strategy'] in ACTIVE_EXTREMES:
+            # 1% is the trailing activation threshold, not a fixed take-profit.
+            tp_hit=False
+            if stop_hit:
+                pass
+            else:
+                activation=float(t['signal_tp'])
+                active=(bar['high']>=activation if side=='LONG' else bar['low']<=activation)
+                if active:
+                    # Use prior stop for this candle; only tighten for NEXT candle.
+                    trail_distance=abs(float(t['signal_entry'])-float(t['signal_stop']))
+                    candidate=bar['close']-trail_distance if side=='LONG' else bar['close']+trail_distance
+                    new_stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
+                    db.execute('UPDATE trades SET stop=? WHERE id=?',(new_stop,t['id']))
         if not(stop_hit or tp_hit): continue
         if stop_hit:
             raw=min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))
@@ -152,7 +172,7 @@ def _progress_key(market, suffix='5m'):
 def _advance_generic(market,bars,signal_lookup,suffix='5m'):
     if market not in MARKETS or not bars:
         return {'processed':0,'reason':'unsupported/no data'}
-    bars=sorted(bars,key=lambda b:b['time']); last=int(bars[-1]['time']); step=60 if suffix=='1m' else 300
+    bars=sorted(bars,key=lambda b:b['time']); last=int(bars[-1]['time']); step=60 if suffix in ('1m','extremes') else 300
     key=_progress_key(market,suffix)
     with _LOCK:
         with conn() as db:
@@ -199,6 +219,10 @@ def advance_opening(market,bars1m,bars5m):
     if market!='nq' or not bars1m or not bars5m:
         return {'processed':0,'reason':'opening strategies only for nq with 1m feed'}
     return _advance_generic(market,bars1m,lambda i:_signals_for_last_1m(market,bars1m[:i+1],bars5m),'1m')
+
+
+def advance_extremes(market,bars1m,bars5m):
+    return _advance_generic(market,bars1m,lambda i:_signals_for_last_extremes(market,bars1m[:i+1],bars5m),'extremes')
 
 
 def summary(market=None):

@@ -1,13 +1,13 @@
 import csv,io,threading,logging
 from contextlib import asynccontextmanager
-from paper_engine import advance, advance_opening, summary
+from paper_engine import advance, advance_opening, advance_extremes, summary
 from fastapi import FastAPI,File,HTTPException,UploadFile,Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from engine import assess,demo_candles
 from strategies import evaluate
 from yahoo_feed import fetch as fetch_yahoo, fetch_1m as fetch_yahoo_1m
-from crypto_feed import fetch as fetch_crypto, SYMBOLS
+from crypto_feed import fetch as fetch_crypto, fetch_1m as fetch_crypto_1m, SYMBOLS
 
 _stop=threading.Event()
 last_poll={market:None for market in list(SYMBOLS)+['nq','nq_opening']}
@@ -20,6 +20,9 @@ def paper_loop():
                 data=fetch_crypto(market)
                 if data['candles'] and not data['error']:
                     last_poll[market]=advance(market,data['candles'])
+                    one=fetch_crypto_1m(market)
+                    if one['candles'] and not one['error']:
+                        last_poll[market+'_1m']=advance_extremes(market,one['candles'],data['candles'])
                 else:
                     last_poll[market]={'processed':0,'reason':data.get('error') or 'no data'}
             except Exception as exc:
@@ -52,7 +55,7 @@ async def lifespan(app):
     thread.join(timeout=3)
 
 
-app=FastAPI(title='Taurus Trading Lab',version='1.1.0',lifespan=lifespan)
+app=FastAPI(title='Taurus Trading Lab',version='1.2.0',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory='static'),name='static')
 DATA={'mode':'DEMO','candles':demo_candles()}
 
@@ -90,10 +93,12 @@ def strategies(market:str=Query('nq',pattern='^(nq|btc|eth|sol|xrp|tao|ada|avax|
     if market in SYMBOLS:
         f=fetch_crypto(market)
         bars=f['candles']
+        f1=fetch_crypto_1m(market)
+        bars1m=f1['candles']
         name=SYMBOLS[market].replace('USDT','/USDT')
-        mode='BINANCE SPOT · 5M'
+        mode='BINANCE SPOT · 5M/1M'
         provider='Binance Spot public klines'
-        error=f['error']
+        error=' · '.join(x for x in (f['error'],f1['error']) if x) or None
         updated=f['last_success']
         market_type='crypto'
     else:

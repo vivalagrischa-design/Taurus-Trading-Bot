@@ -204,4 +204,8 @@ def evaluate(bars, bars1m=None, market='nq'):
     result.append(_orb_signals_5m(bars, enabled=(market=='nq')))
     short_tile,long_tile=_opening_signals_1m(bars1m or [], enabled=(market=='nq'))
     result.extend([short_tile,long_tile])
+    from bb_rsi import build
+    result.extend(build(bars1m or []))
+    from reversal import build as reversal_build
+    result.extend(reversal_build(bars))
     return result
