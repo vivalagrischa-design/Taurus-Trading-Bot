@@ -177,6 +177,9 @@ def _add_scaled_legs(db,market,bar,suffix):
         if (side=='SHORT' and open_price>=stop) or (side=='LONG' and open_price<=stop):
             db.execute("UPDATE trades SET scale_pending=0 WHERE id=?",(t['id'],));continue
         fill=_slipped(open_price,side,True)
+        previous=float(t['last_leg_price'] or old_entry)
+        if (side=='SHORT' and fill<=previous) or (side=='LONG' and fill>=previous):
+            db.execute("UPDATE trades SET scale_pending=0 WHERE id=?",(t['id'],));continue
         budget=max(0,MAX_NOTIONAL/3)
         add_qty=math.floor(min(budget/max(fill,1e-12),max(0,MAX_NOTIONAL-old_qty*old_entry)/max(fill,1e-12))*1e6)/1e6
         if add_qty<=0:
@@ -266,7 +269,7 @@ def _close_open(db,market,bar,suffix):
         # TP is an actual exit. If both SL and TP are touched within one OHLC
         # candle, conservatively assume SL first (intrabar order unknown).
         # Trailing decisions use the finished candle and take effect next bar.
-        if not (stop_hit or tp_hit):
+        if not (stop_hit or tp_hit) and t['strategy']!='bb_rsi_scale':
             initial_r=abs(float(t['entry'])-float(t['signal_stop']))
             if initial_r>0:
                 direction=1 if side=='LONG' else -1
