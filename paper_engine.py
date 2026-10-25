@@ -15,7 +15,7 @@ SLIPPAGE=float(os.environ.get('TAURUS_PAPER_SLIPPAGE','0.0002'))
 MARKETS=tuple(__import__('crypto_feed').SYMBOLS)+('nq',)
 ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce')
 ACTIVE_1M=('opening_drop','opening_reversal')
-ACTIVE_EXTREMES=('bb_rsi_short','bb_rsi_long')
+ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
 _LOCK=threading.RLock()
 
