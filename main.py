@@ -37,6 +37,7 @@ def paper_loop():
             f1=fetch_yahoo_1m()
             if f5['candles'] and f1['candles'] and not f1['error']:
                 last_poll['nq_opening']=advance_opening('nq',f1['candles'],f5['candles'])
+                last_poll['nq_bb']=advance_extremes('nq',f1['candles'],f5['candles'])
             else:
                 last_poll['nq_opening']={'processed':0,'reason':f1.get('error') or 'no 1m data'}
         except Exception as exc:
