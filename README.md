@@ -1,3 +1,9 @@
+TAURUS Trading Lab v0.5
+
+- Fixes orange error banner caused by missing DOM node access.
+- Adds logo/favicon.
+- Uses dark UI with violet accents.
+
 # OMAR LIVE 0.1 – Chart-first Dashboard
 
 **Installierbarer Prototyp für GitHub + Render**. Das Dashboard visualisiert Nasdaq-Futures-Signale mit Candlesticks, Breakout, Retest, Entry, SL, TP und Historie. Responsive für iPhone/Mac. **Keine echten Live-Daten oder Push-Alarme in V0.1.**

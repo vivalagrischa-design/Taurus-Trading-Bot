@@ -6,7 +6,7 @@ from engine import assess,demo_candles
 from strategies import evaluate
 from yahoo_feed import fetch as fetch_yahoo
 
-app=FastAPI(title='Omar Live – Dashboard',version='0.1.0')
+app=FastAPI(title='Taurus Trading Lab',version='0.5.0')
 app.mount('/static',StaticFiles(directory='static'),name='static')
 # Demo / uploaded bars are in process memory: no durable storage, no claimed realtime feed.
 DATA={'mode':'DEMO','candles':demo_candles()}
