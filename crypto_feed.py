@@ -1,7 +1,7 @@
 """Public Binance Spot OHLCV research feed. No credentials, no order placement."""
 import json,time,urllib.request,threading,math
 _CACHE={}; _LOCK=threading.Lock(); REFRESH_SECONDS=60
-SYMBOLS={'btc': 'BTCUSDT', 'eth': 'ETHUSDT', 'sol': 'SOLUSDT', 'xrp': 'XRPUSDT', 'tao': 'TAOUSDT', 'ada': 'ADAUSDT', 'avax': 'AVAXUSDT', 'link': 'LINKUSDT', 'doge': 'DOGEUSDT', 'sui': 'SUIUSDT'}
+SYMBOLS={'btc': 'BTCUSDT', 'eth': 'ETHUSDT', 'sol': 'SOLUSDT', 'xrp': 'XRPUSDT', 'tao': 'TAOUSDT', 'ada': 'ADAUSDT', 'avax': 'AVAXUSDT', 'link': 'LINKUSDT', 'doge': 'DOGEUSDT', 'sui': 'SUIUSDT', 'bnb':'BNBUSDT', 'trx':'TRXUSDT', 'ltc':'LTCUSDT', 'bch':'BCHUSDT', 'dot':'DOTUSDT', 'uni':'UNIUSDT', 'aave':'AAVEUSDT', 'apt':'APTUSDT', 'arb':'ARBUSDT', 'op':'OPUSDT', 'inj':'INJUSDT', 'near':'NEARUSDT', 'atom':'ATOMUSDT', 'fil':'FILUSDT', 'pepe':'PEPEUSDT', 'shib':'SHIBUSDT', 'wif':'WIFUSDT', 'bonk':'BONKUSDT', 'fet':'FETUSDT', 'render':'RENDERUSDT', 'zora':'ZORAUSDT', 'm':'MUSDT', 'vic':'VICUSDT'}
 def fetch(market):
     if market not in SYMBOLS: raise ValueError('Unknown crypto market')
     now=time.time()
