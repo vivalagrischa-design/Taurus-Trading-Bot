@@ -73,7 +73,8 @@ def init_extra(db):
     cols={'mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION',
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
-          'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER'}
+          'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
+          'stop_net_estimate':'DOUBLE PRECISION'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
@@ -170,8 +171,17 @@ def _open_pending(db,market,bar,history):
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
         bbpos,pct,rsi=_entry_indicators(history)
-        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0 WHERE id=?",
+        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=NULL WHERE id=?",
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,t['id']))
+
+
+def _estimated_net_at_stop(trade,stop,market):
+    """Conservative projected exit P/L: exit-side slippage plus both fees."""
+    side=trade['side']; entry=float(trade['entry']); qty=float(trade['qty'])
+    exit_price=_slipped(float(stop),side,False)
+    gross=(exit_price-entry)*qty*(1 if side=='LONG' else -1)*(2 if market=='nq' else 1)
+    fees=(qty*3.0 if market=='nq' else (entry+exit_price)*qty*FEE_RATE)
+    return round(gross-fees,4)
 
 
 def _close_open(db,market,bar):
@@ -203,7 +213,10 @@ def _close_open(db,market,bar):
                     candidate=float(bar['close'])-direction*initial_r
                     new_stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
                     if new_stop!=stop:
-                        db.execute('UPDATE trades SET stop=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(new_stop,t['id']))
+                        net_at_stop=_estimated_net_at_stop(t,new_stop,market)
+                        # Preserve protective trailing even before break-even;
+                        # distinguish gross locked profit from after-cost result.
+                        db.execute('UPDATE trades SET stop=?,stop_net_estimate=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(new_stop,net_at_stop,t['id']))
         if not(stop_hit or tp_hit): continue
         if stop_hit:
             raw=min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))
