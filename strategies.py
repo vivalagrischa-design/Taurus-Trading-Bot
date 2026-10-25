@@ -182,6 +182,43 @@ def _opening_signals_1m(bars1m, enabled=True):
     return short_tile, long_tile
 
 
+
+def _simple_repetitive(bars, market):
+    """Two simple 5m research signals; strictly closed bars and no lookahead."""
+    names=[('trend_pullback','Trend EMA20 Pullback'),('bb_rsi_scale','BB+RSI gestaffelt (max. 3)')]
+    found={name:[] for name,_ in names}
+    if len(bars)<80:
+        return [tile(name,label,'neutral','Mindestens 80 abgeschlossene 5M-Kerzen',[],[]) for name,label in names]
+    closes=[float(b['close']) for b in bars]
+    ma20=ema(closes,20);ma50=ema(closes,50);rs=rsi(closes)
+    from math import sqrt
+    for i in range(60,len(bars)):
+        b=bars[i];p=bars[i-1];price=float(b['close'])
+        window=closes[i-19:i+1];mid=sum(window)/20
+        sd=sqrt(sum((x-mid)**2 for x in window)/20)
+        upper=mid+2*sd;lower=mid-2*sd
+        if sd==0:continue
+        # Moving averages aligned and rising/falling over five completed 5m bars.
+        up=ma20[i]>ma50[i] and ma20[i]>ma20[i-5] and ma50[i]>ma50[i-5]
+        down=ma20[i]<ma50[i] and ma20[i]<ma20[i-5] and ma50[i]<ma50[i-5]
+        if up and p['close']<=ma20[i-1] and price>ma20[i] and price>p['high']:
+            stop=min(x['low'] for x in bars[i-3:i+1])
+            if stop<price:found['trend_pullback'].append(signal_with_params('trend_pullback','LONG',b['time'],price,stop,price+2*(price-stop),'EMA20 pullback in rising EMA20/EMA50 trend',ma20[i],timeframe='5m'))
+        if down and p['close']>=ma20[i-1] and price<ma20[i] and price<p['low']:
+            stop=max(x['high'] for x in bars[i-3:i+1])
+            if stop>price:found['trend_pullback'].append(signal_with_params('trend_pullback','SHORT',b['time'],price,stop,price-2*(stop-price),'EMA20 pullback in falling EMA20/EMA50 trend',ma20[i],timeframe='5m'))
+        # Countertrend mean reversion: avoid strong monotonic EMA trend; separate
+        # this experiment from the strict 1M/5M/15M extreme variants.
+        extreme_short=rs[i] is not None and rs[i]>=80 and price>=upper
+        extreme_long=rs[i] is not None and rs[i]<=20 and price<=lower
+        if extreme_short or extreme_long:
+            side='SHORT' if extreme_short else 'LONG'
+            stop=price*(1.015 if side=='SHORT' else .985)
+            tp=price*(.995 if side=='SHORT' else 1.005)
+            found['bb_rsi_scale'].append(signal_with_params('bb_rsi_scale',side,b['time'],price,stop,tp,'5M BB20 outer band + RSI extreme; capped three-leg net-TP cycle',upper if extreme_short else lower,timeframe='5m'))
+    return [tile(name,label,'green' if found[name] and found[name][-1]['time']==bars[-1]['time'] else 'neutral','5M Entry nächste Kerze; max. 200 USD Gesamtrisiko; BB+RSI: gestaffelt und gemeinsames Nettoziel',found[name],[('Signal letzte Kerze','green' if found[name] and found[name][-1]['time']==bars[-1]['time'] else 'neutral')]) for name,label in names]
+
+
 def evaluate(bars, bars1m=None, market='nq'):
     if len(bars)<75:return []
     closes=[b['close'] for b in bars]; e20=ema(closes,20); e50=ema(closes,50); rs=rsi(closes)
@@ -208,4 +245,5 @@ def evaluate(bars, bars1m=None, market='nq'):
     result.extend(build(bars1m or []))
     from reversal import build as reversal_build
     result.extend(reversal_build(bars))
+    result.extend(_simple_repetitive(bars,market))
     return result
