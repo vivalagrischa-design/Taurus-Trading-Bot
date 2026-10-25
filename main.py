@@ -125,7 +125,7 @@ def strategies(market: str = Query('nq', pattern=r'^[a-z0-9]{1,16}$')):
             for sig in st['signals']:
                 sig['mnq_contracts']=None
                 sig['status']='KRYPTO · HISTORISCHER TESTKANDIDAT'
-    return {'mode':mode,'realtime':False,'market':name,'candles_5m':bars[-210:],'candles_1m':bars1m[-260:] if bars1m else [],
+    return {'mode':mode,'realtime':False,'market':name,'candles_5m':bars[-420:],'candles_1m':bars1m[-900:] if bars1m else [],
             'strategies':evaluated,'last_bar_time':bars[-1]['time'], 'last_bar_time_1m':bars1m[-1]['time'] if bars1m else None,
             'feed_error':error,'last_fetch_time':updated,'provider':provider,
             'market_type':market_type}
