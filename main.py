@@ -89,7 +89,7 @@ def state():
 
 
 @app.get('/api/strategies')
-def strategies(market:str=Query('nq',pattern='^[a-z0-9]{1,16}
+def strategies(market: str = Query('nq', pattern=r'^[a-z0-9]{1,16}$')):
     bars1m=[]
     if market in SYMBOLS:
         f=fetch_crypto(market)
