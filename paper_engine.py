@@ -4,6 +4,7 @@ State persisted in SQLite/PostgreSQL. Single process required.
 """
 import os,sqlite3,threading,math
 from strategies import evaluate
+from setup_quality import score_signal
 
 DB=os.environ.get('TAURUS_DB_PATH','/tmp/taurus_paper.db')
 DATABASE_URL=os.environ.get('DATABASE_URL','')
@@ -239,11 +240,13 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                 for strategy,sig in signal_lookup(i):
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
+                    quality=score_signal(sig,bars[:i+1])
+                    score_note='QUALITY_'+str(quality['score'])+'_'+quality['grade']
                     exists=db.execute("SELECT 1 FROM trades WHERE market=? AND strategy=? AND status IN ('PENDING','OPEN')",(market,strategy)).fetchone()
                     if exists:
-                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE')
+                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note)
                         continue
-                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN')
+                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note)
                     db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe)
                                   VALUES(?,?,?,?,?,'PENDING',?,?,?,?)''',
                                (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m')))
