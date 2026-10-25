@@ -166,26 +166,35 @@ function inspectTradeAt(time){
     (Number.isFinite(t.pnl)?' · Netto '+signed(t.pnl):'');
 }
 function overlayTradeMarkers(){
-  if(!series || !currentCandles.length)return;
+  if(!series||!currentCandles.length)return;
   const times=new Set(currentCandles.map(b=>b.time));
   const interval=chartFrame==='1m'&&candles1m.length?60:chartFrame==='15m'?900:chartFrame==='1h'?3600:300;
-  const markers=[];
+  const grouped=new Map();
   const shown=paperTradesCache.filter(t=>t.market===currentMarket);
   for(const t of shown){
-    if(t.status==='PENDING')continue;
+    if(t.status==='PENDING'||t.status==='CANCELLED'||t.status==='ARCHIVED')continue;
     for(const [kind,raw] of [['IN',t.entry_time],['OUT',t.exit_time]]){
       if(!raw)continue;
       const time=Math.floor(Number(raw)/interval)*interval;
       if(!times.has(time))continue;
-      const entry=kind==='IN';const buy=t.side==='LONG';
-      const profit=typeof t.pnl==='number'&&t.pnl>=0;
-      markers.push({time,position:entry?(buy?'belowBar':'aboveBar'):(buy?'aboveBar':'belowBar'),
-        shape:entry?(buy?'arrowUp':'arrowDown'):'circle',
-        color:entry?'#57b6ff':profit?'#38c99c':'#f27882',
-        text:entry?(buy?'L':'S'):`${profit?'+':'−'}${t.pnl==null?'EXIT':Math.abs(t.pnl).toFixed(0)+'$'}`});
+      const entry=kind==='IN',buy=t.side==='LONG',side=buy?'LONG':'SHORT';
+      const key=[time,kind,side].join(':');
+      if(!grouped.has(key))grouped.set(key,{time,kind,buy,trades:[]});
+      grouped.get(key).trades.push(t);
     }
   }
-  // Keep historic candidate separate from actual paper fills.
+  const markers=[];
+  for(const g of grouped.values()){
+    const entry=g.kind==='IN',count=g.trades.length;
+    const total=g.trades.reduce((n,t)=>n+(Number.isFinite(t.pnl)?t.pnl:0),0);
+    const profit=total>=0;
+    markers.push({time:g.time,
+      position:entry?(g.buy?'belowBar':'aboveBar'):(g.buy?'aboveBar':'belowBar'),
+      shape:entry?(g.buy?'arrowUp':'arrowDown'):'circle',
+      color:entry?'#57b6ff':profit?'#38c99c':'#f27882',
+      text:entry?(count>1?count+'× '+(g.buy?'L':'S'):(g.buy?'L':'S')):
+      (count>1?count+'× ':'')+(profit?'+':'−')+Math.abs(total).toFixed(0)+'$'});
+  }
   if(showSetupLevels&&selected){for(const [time,label] of [[selected.breakout_time,'SETUP'],[selected.time,'SIGNAL']]){
     if(times.has(time))markers.push({time,position:selected.side==='LONG'?'belowBar':'aboveBar',shape:'circle',color:'#fac36b',text:label});
   }}
@@ -304,7 +313,20 @@ $('paperTotals').replaceChildren();for(const [name,value] of [['Geschlossene Tra
 bars('winLossBars',[['Gewinn (+)',wins,'#36c99c'],['Verlust (−)',losses,'#f27882']]);
 const ranges=[['< −100',x=>x< -100],['−100 bis −50',x=>x>=-100&&x< -50],['−50 bis 0',x=>x>=-50&&x<0],['0 bis +50',x=>x>=0&&x<50],['+50 bis +100',x=>x>=50&&x<=100],['> +100',x=>x>100]];
 bars('rangeBars',ranges.map(([name,test])=>[name,closed.filter(t=>test(t.pnl)).length,name.includes('−')||name.startsWith('<')?'#f27882':'#36c99c']));equity(closed);
-const tbody=$('paperTrades');tbody.replaceChildren();for(const t of scope.slice(0,140)){const tr=document.createElement('tr');const row=[t.market.toUpperCase(),t.strategy.toUpperCase(),t.side,t.entry_time?format(t.entry_time):'–',num(t.entry),(num(t.stop)+' / '+num(t.tp)+'*'),t.status,t.pnl==null?'–':signed(t.pnl),(t.mfe_usd==null?'–':signed(t.mfe_usd))+' / '+(t.mae_usd==null?'–':signed(t.mae_usd)),t.bb_position||'–',(!['rsi_ema','bb_rsi_short','bb_rsi_long'].includes(t.strategy)||t.entry_rsi==null)?'–':Number(t.entry_rsi).toFixed(1),t.trail_updates==null?'–':t.trail_updates];row.forEach((val,i)=>{const td=document.createElement('td');td.textContent=val;td.setAttribute('data-label',['Markt','Strategie','Richtung','Zeit UTC','Entry','SL / TP','Status','Netto P/L','MFE / MAE','BB','RSI','SL-Nachzüge'][i]);if(i===7&&t.pnl!=null)td.className=t.pnl>=0?'paperPos':'paperNeg';tr.append(td)});tbody.append(tr)}
+const tbody=$('paperTrades');tbody.replaceChildren();for(const t of scope.slice(0,140)){const tr=document.createElement('tr');const row=[t.market.toUpperCase(),t.strategy.toUpperCase(),t.side,t.entry_time?format(t.entry_time):'–',num(t.entry),(num(t.stop)+' / '+num(t.tp)+'*'),t.status,t.pnl==null?'–':signed(t.pnl),(t.mfe_usd==null?'–':signed(t.mfe_usd))+' / '+(t.mae_usd==null?'–':signed(t.mae_usd)),t.bb_position||'–',(!['rsi_ema','bb_rsi_short','bb_rsi_long'].includes(t.strategy)||t.entry_rsi==null)?'–':Number(t.entry_rsi).toFixed(1),t.trail_updates==null?'–':t.trail_updates];row.forEach((val,i)=>{const td=document.createElement('td');td.textContent=val;td.setAttribute('data-label',['Markt','Strategie','Richtung','Zeit UTC','Entry','SL / TP','Status','Netto P/L','MFE / MAE','BB','RSI','SL-Nachzüge'][i]);if(i===7&&t.pnl!=null)td.className=t.pnl>=0?'paperPos':'paperNeg';tr.append(td)});tr.style.cursor='pointer';tr.title='Trade im Chart anzeigen';tr.addEventListener('click',()=>{
+ currentMarket=t.market;const marketPicker=$('market');if(marketPicker)marketPicker.value=t.market;
+ selectedTrade=t;showSetupLevels=false;selected=null;
+ load().then(()=>{selectedTrade=t;overlayTradeMarkers();const when=Number(t.entry_time||t.signal_time);
+ if(when&&chart){const interval=chartFrame==='1m'?60:chartFrame==='15m'?900:chartFrame==='1h'?3600:300;
+ const pos=Math.floor(when/interval)*interval;chart.timeScale().setVisibleRange({from:pos-interval*16,to:pos+interval*16});}
+ const details=$('tradeInspection');if(details)details.textContent=
+ t.strategy.toUpperCase()+' · '+t.side+' · '+t.status+' · Entry '+num(t.entry)+
+ ' · initialer SL '+num(t.initial_stop)+' · aktueller SL '+num(t.stop)+' · TP '+num(t.tp)+
+ (Number.isFinite(t.exit)?' · Exit '+num(t.exit):'')+
+ (Number.isFinite(t.pnl)?' · Netto '+signed(t.pnl):'');
+ $('chartPanel').scrollIntoView({behavior:'smooth',block:'start'});
+ });
+ });tbody.append(tr)}
 if(!scope.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=12;td.textContent='Noch keine seit Start aufgezeichneten Papertrades.';tr.append(td);tbody.append(tr)}
 const events=(d.events||[]).filter(e=>activeTab==='live'||e.strategy===activeTab);
 $('paperStatus').textContent=`${events.length} protokollierte Signale (letzte 1000) · ${events.filter(e=>e.decision==='SKIPPED').length} übersprungen · 200 USD geplantes Risiko pro Trade. MFE/MAE sind OHLC-Extremwerte, keine garantiert ausführbaren Gewinne. Historische Daten ohne Diagnosewerte bleiben leer. NQ läuft als verzögerte Yahoo-Simulation; Opening-Strategien nutzen 1M-Daten. ${d.persistence==='PostgreSQL'?'Persistente Datenbank verbunden.':'WARNUNG: Lokale Datenbank – auf Render ohne Persistent Disk nicht dauerhaft!'} Keine Echtgeld-Orders.`;
