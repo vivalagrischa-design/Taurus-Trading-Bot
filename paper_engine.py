@@ -4,6 +4,7 @@ State persisted in SQLite/PostgreSQL. Single process required.
 """
 import os,sqlite3,threading,math
 from strategies import evaluate
+from setup_quality import score_signal
 
 DB=os.environ.get('TAURUS_DB_PATH','/tmp/taurus_paper.db')
 DATABASE_URL=os.environ.get('DATABASE_URL','')
@@ -14,7 +15,7 @@ SLIPPAGE=float(os.environ.get('TAURUS_PAPER_SLIPPAGE','0.0002'))
 MARKETS=tuple(__import__('crypto_feed').SYMBOLS)+('nq',)
 ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce')
 ACTIVE_1M=('opening_drop','opening_reversal')
-ACTIVE_EXTREMES=('bb_rsi_short','bb_rsi_long')
+ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
 _LOCK=threading.RLock()
 
@@ -67,6 +68,17 @@ def init_tables(db):
 
 
 def init_extra(db):
+    # Idempotent additive migrations, including PostgreSQL.
+    cols={'mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION',
+          'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
+          'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
+          'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER'}
+    for name,sqltype in cols.items():
+        if isinstance(db,PgConnection):
+            db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
+        else:
+            known={r['name'] for r in db.execute('PRAGMA table_info(trades)').fetchall()}
+            if name not in known:db.execute('ALTER TABLE trades ADD COLUMN '+name+' '+sqltype)
     db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT)''')
     db.execute('CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy,market,signal_time)')
 
@@ -108,7 +120,26 @@ def _signals_for_last_extremes(market,bars1m,bars5m):
     return [(st['id'],sig) for st in build(bars1m) if st['id'] in ACTIVE_EXTREMES for sig in st['signals'] if sig['time']==bars1m[-1]['time']]
 
 
-def _open_pending(db,market,bar):
+def _entry_indicators(history):
+    """Indicators from completed bars available at the time of entry."""
+    if len(history)<20:return ('INSUFFICIENT',None,None)
+    closes=[float(b['close']) for b in history]
+    sample=closes[-20:]; mean=sum(sample)/20
+    sd=math.sqrt(sum((c-mean)**2 for c in sample)/20)
+    price=closes[-1]; upper=mean+2*sd; lower=mean-2*sd
+    pct=(price-lower)/(upper-lower) if upper>lower else 0.5
+    position='ABOVE_UPPER' if price>upper else 'BELOW_LOWER' if price<lower else 'UPPER_HALF' if price>=mean else 'LOWER_HALF'
+    if len(closes)<15:return (position,round(pct,4),None)
+    gains=[max(0,closes[j]-closes[j-1]) for j in range(1,len(closes))]
+    losses=[max(0,closes[j-1]-closes[j]) for j in range(1,len(closes))]
+    avg_g=sum(gains[:14])/14;avg_l=sum(losses[:14])/14
+    for j in range(14,len(gains)):
+        avg_g=(avg_g*13+gains[j])/14;avg_l=(avg_l*13+losses[j])/14
+    rsi=100 if avg_l==0 else 100-100/(1+avg_g/avg_l)
+    return (position,round(pct,4),round(rsi,2))
+
+
+def _open_pending(db,market,bar,history):
     pending=db.execute("SELECT * FROM trades WHERE market=? AND status='PENDING' AND signal_time<?",(market,bar['time'])).fetchall()
     for t in pending:
         side=t['side']; entry=_slipped(float(bar['open']),side,True); stop=float(t['signal_stop']); tp=float(t['signal_tp'])
@@ -127,30 +158,41 @@ def _open_pending(db,market,bar):
         risk_plan=qty*risk_per_unit
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
-        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=? WHERE id=?",
-                   (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,t['id']))
+        bbpos,pct,rsi=_entry_indicators(history)
+        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0 WHERE id=?",
+                   (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,t['id']))
 
 
 def _close_open(db,market,bar):
     rows=db.execute("SELECT * FROM trades WHERE market=? AND status='OPEN' AND entry_time<=?",(market,bar['time'])).fetchall()
     for t in rows:
         side=t['side']; stop=t['stop']; tp=t['tp']
+        multiplier=2 if market=='nq' else 1
+        direction=1 if side=='LONG' else -1
+        favorable=(float(bar['high'])-float(t['entry'])) if side=='LONG' else (float(t['entry'])-float(bar['low']))
+        adverse=(float(t['entry'])-float(bar['low'])) if side=='LONG' else (float(bar['high'])-float(t['entry']))
+        fee_est=(float(t['cost_estimate'] or 0))
+        mfe=max(float(t['mfe_usd'] or 0),favorable*float(t['qty'])*multiplier-fee_est)
+        mae=min(float(t['mae_usd'] or 0),-adverse*float(t['qty'])*multiplier-fee_est)
+        db.execute('UPDATE trades SET mfe_usd=?,mae_usd=? WHERE id=?',(round(mfe,4),round(mae,4),t['id']))
         stop_hit=(bar['low']<=stop if side=='LONG' else bar['high']>=stop)
         tp_hit=(bar['high']>=tp if side=='LONG' else bar['low']<=tp)
-        if t['strategy'] in ACTIVE_EXTREMES:
-            # 1% is the trailing activation threshold, not a fixed take-profit.
-            tp_hit=False
-            if stop_hit:
-                pass
-            else:
-                activation=float(t['signal_tp'])
-                active=(bar['high']>=activation if side=='LONG' else bar['low']<=activation)
-                if active:
-                    # Use prior stop for this candle; only tighten for NEXT candle.
-                    trail_distance=abs(float(t['signal_entry'])-float(t['signal_stop']))
-                    candidate=bar['close']-trail_distance if side=='LONG' else bar['close']+trail_distance
+        # Profit targets are reference levels, not automatic exits.
+        # The initial stop always applies for the ENTIRE current candle.
+        # A trailing adjustment is committed only AFTER its candle closes;
+        # it is effective from the next candle (no same-bar lookahead).
+        tp_hit=False
+        if not stop_hit:
+            initial_r=abs(float(t['entry'])-float(t['signal_stop']))
+            if initial_r>0:
+                direction=1 if side=='LONG' else -1
+                favorable_close=(float(bar['close'])-float(t['entry']))*direction
+                # Arm at +1R on a confirmed close, then follow the close by 1R.
+                if favorable_close>=initial_r:
+                    candidate=float(bar['close'])-direction*initial_r
                     new_stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
-                    db.execute('UPDATE trades SET stop=? WHERE id=?',(new_stop,t['id']))
+                    if new_stop!=stop:
+                        db.execute('UPDATE trades SET stop=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(new_stop,t['id']))
         if not(stop_hit or tp_hit): continue
         if stop_hit:
             raw=min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))
@@ -193,16 +235,18 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
             for i,b in pending:
                 if i<warmup:
                     db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key)); continue
-                _open_pending(db,market,b)
+                _open_pending(db,market,b,bars[:i])
                 _close_open(db,market,b)
                 for strategy,sig in signal_lookup(i):
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
+                    quality=score_signal(sig,bars[:i+1])
+                    score_note='QUALITY_'+str(quality['score'])+'_'+quality['grade']
                     exists=db.execute("SELECT 1 FROM trades WHERE market=? AND strategy=? AND status IN ('PENDING','OPEN')",(market,strategy)).fetchone()
                     if exists:
-                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE')
+                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note)
                         continue
-                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN')
+                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note)
                     db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe)
                                   VALUES(?,?,?,?,?,'PENDING',?,?,?,?)''',
                                (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m')))
