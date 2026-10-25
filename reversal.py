@@ -49,4 +49,4 @@ def build(bars):
                 found[key+'_confirmed'].append(signal_with_params(
                     key+'_confirmed',side,b['time'],entry,stop,tp,
                     reason+' | prior trend + BB20 edge + confirmed reversal',stop,timeframe='5m'))
-    return [tile(key,name,'green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral','5M-Umkehrmuster · Entry nächste Kerze · SL am Swing · TP 2R',found[key],[('Signal letzte Kerze','green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral')]) for key,name in PATTERNS+CONFIRMED]
+    return [tile(key,name,'green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral',('5M-Trend + BB20-Randzone + Umkehrkerze · nächste Kerze · SL Swing · TP 2R' if key.endswith('_confirmed') else '5M-Basismuster (Vergleich) · nächste Kerze · SL Swing · TP 2R'),found[key],[('Signal letzte Kerze','green' if found[key] and found[key][-1]['time']==bars[-1]['time'] else 'neutral')]) for key,name in PATTERNS+CONFIRMED]
