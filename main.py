@@ -6,44 +6,30 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from engine import assess,demo_candles
 from strategies import evaluate
-from yahoo_feed import fetch as fetch_yahoo, fetch_1m as fetch_yahoo_1m
+from yahoo_feed import fetch as fetch_yahoo, fetch_1m as fetch_yahoo_1m, fetch_market, FUTURES
 from crypto_feed import fetch as fetch_crypto, fetch_1m as fetch_crypto_1m, SYMBOLS
 
 _stop=threading.Event()
-last_poll={market:None for market in list(SYMBOLS)+['nq','nq_opening']}
+last_poll={market:None for market in FUTURES}
 
 
 def paper_loop():
     while not _stop.is_set():
-        for market in SYMBOLS:
+        for market in FUTURES:
             try:
-                data=fetch_crypto(market)
-                if data['candles'] and not data['error']:
-                    last_poll[market]=advance(market,data['candles'])
-                    one=fetch_crypto_1m(market)
-                    if one['candles'] and not one['error']:
-                        last_poll[market+'_1m']=advance_extremes(market,one['candles'],data['candles'])
-                else:
-                    last_poll[market]={'processed':0,'reason':data.get('error') or 'no data'}
+                five=fetch_market(market,'5m')
+                if not five['candles'] or five['error']:
+                    last_poll[market]={'processed':0,'reason':five.get('error') or 'no 5m data'}
+                    continue
+                last_poll[market]=advance(market,five['candles'])
+                one=fetch_market(market,'1m')
+                if one['candles'] and not one['error']:
+                    last_poll[market+'_bb']=advance_extremes(market,one['candles'],five['candles'])
+                    if market=='nq':
+                        last_poll[market+'_opening']=advance_opening(market,one['candles'],five['candles'])
             except Exception as exc:
-                logging.exception('Paper poll failed for %s',market)
+                logging.exception('Futures paper poll failed for %s',market)
                 last_poll[market]={'processed':0,'reason':str(exc)[:180]}
-        try:
-            f5=fetch_yahoo()
-            if f5['candles'] and not f5['error']:
-                last_poll['nq']=advance('nq',f5['candles'])
-            else:
-                last_poll['nq']={'processed':0,'reason':f5.get('error') or 'no data'}
-            f1=fetch_yahoo_1m()
-            if f5['candles'] and f1['candles'] and not f1['error']:
-                last_poll['nq_opening']=advance_opening('nq',f1['candles'],f5['candles'])
-                last_poll['nq_bb']=advance_extremes('nq',f1['candles'],f5['candles'])
-            else:
-                last_poll['nq_opening']={'processed':0,'reason':f1.get('error') or 'no 1m data'}
-        except Exception as exc:
-            logging.exception('Nasdaq delayed paper poll failed')
-            last_poll['nq']={'processed':0,'reason':str(exc)[:180]}
-            last_poll['nq_opening']={'processed':0,'reason':str(exc)[:180]}
         _stop.wait(60)
 
 
@@ -91,34 +77,25 @@ def state():
 @app.get('/api/strategies')
 def strategies(market: str = Query('nq', pattern=r'^[a-z0-9]{1,16}$')):
     bars1m=[]
-    if market in SYMBOLS:
-        f=fetch_crypto(market)
-        bars=f['candles']
-        f1=fetch_crypto_1m(market)
-        bars1m=f1['candles']
-        name=SYMBOLS[market].replace('USDT','/USDT')
-        mode='BINANCE SPOT · 5M/1M'
-        provider='Binance Spot public klines'
-        error=' · '.join(x for x in (f['error'],f1['error']) if x) or None
-        updated=f['last_success']
-        market_type='crypto'
-    else:
-        f=fetch_yahoo()
-        f1=fetch_yahoo_1m()
-        bars=f['candles']
-        bars1m=f1['candles']
-        name='Nasdaq NQ=F'
-        mode='YAHOO (VERZÖGERT) · 5M/1M' if bars else 'KEINE YAHOO-DATEN'
-        provider='Yahoo Finance NQ=F'
-        error=' · '.join(x for x in [f.get('error'), f1.get('error')] if x) or None
-        updated=max([x for x in [f.get('last_success'), f1.get('last_success')] if x] or [None])
-        market_type='futures'
+    if market not in FUTURES:
+        raise HTTPException(status_code=400,detail='TAURUS handelt im aktuellen Test nur Lucid-Futures: nq, mes, mgc')
+    f=fetch_market(market,'5m')
+    f1=fetch_market(market,'1m')
+    bars=f['candles']
+    bars1m=f1['candles']
+    symbol={'nq':'MNQ (Nasdaq)','mes':'MES (S&P 500)','mgc':'MGC (Gold)'}[market]
+    name=symbol+' · Yahoo-Proxy '+FUTURES[market]
+    mode='LUCID FUTURES PAPER · VERZÖGERTE DATEN'
+    provider='Yahoo Finance '+FUTURES[market]+' (Proxy, nicht Lucid-Livefeed)'
+    error=' · '.join(x for x in [f.get('error'),f1.get('error')] if x) or None
+    updated=max([x for x in [f.get('last_success'),f1.get('last_success')] if x] or [None])
+    market_type='futures'
     if not bars:
         return {'mode':mode,'realtime':False,'market':name,'candles_5m':[],'candles_1m':bars1m,
                 'strategies':[],'last_bar_time':None,'feed_error':error,
                 'last_fetch_time':updated,'provider':provider,'market_type':market_type}
     evaluated=evaluate(bars,bars1m=bars1m,market=market)
-    if market!='nq':
+    if False:
         for st in evaluated:
             if st['id'] in ('opening_drop','opening_reversal','orb'):
                 continue
