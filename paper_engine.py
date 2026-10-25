@@ -74,7 +74,7 @@ def init_extra(db):
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
           'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
-          'stop_net_estimate':'DOUBLE PRECISION'}
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
@@ -171,8 +171,22 @@ def _open_pending(db,market,bar,history):
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
         bbpos,pct,rsi=_entry_indicators(history)
-        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=NULL WHERE id=?",
-                   (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,t['id']))
+        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=? WHERE id=?",
+                   (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
+                    _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
+                    _net_break_even_stop(entry,side,market),t['id']))
+
+
+def _net_break_even_stop(entry,side,market):
+    """Raw stop trigger required for estimated zero net P/L after fill slippage and fees."""
+    if market=='nq':
+        # $3 round trip per contract; NQ model multiplier $2/point.
+        actual_exit=entry+(1.5 if side=='LONG' else -1.5)
+    elif side=='LONG':
+        actual_exit=entry*(1+FEE_RATE)/(1-FEE_RATE)
+    else:
+        actual_exit=entry*(1-FEE_RATE)/(1+FEE_RATE)
+    return actual_exit/(1-SLIPPAGE if side=='LONG' else 1+SLIPPAGE)
 
 
 def _estimated_net_at_stop(trade,stop,market):
