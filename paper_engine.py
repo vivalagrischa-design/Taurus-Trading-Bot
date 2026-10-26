@@ -215,6 +215,10 @@ def _open_pending(db,market,bar,history,suffix):
             multiplier,commission=FUTURES[market]
             risk_per_unit=abs(entry-stop)*multiplier+commission+FUTURES_TICK[market]*FUTURES_SLIP_TICKS*multiplier
             qty=math.floor(RISK/max(risk_per_unit,0.0001))
+            # Lucid paper account: aggregate open + pending futures positions,
+            # not merely per-strategy size. Fail closed if capacity is exhausted.
+            from lucid_risk import allowed_quantity
+            qty=allowed_quantity(db, market, side, qty, exclude_trade_id=t['id'])
             fees_est=qty*commission
         else:
             risk_per_unit=dist+entry*FEE_RATE+stop*FEE_RATE+entry*SLIPPAGE+stop*SLIPPAGE
