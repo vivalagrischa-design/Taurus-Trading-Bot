@@ -19,7 +19,8 @@ MARKETS=tuple(FUTURES)
 ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed','trend_pullback','trend_pullback_mtf','bb_rsi_scale')
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
-ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
+ACTIVE_3M=('vwap_ema_cross_3m',)
+ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES+ACTIVE_3M
 TEST_VERSION='lucid_futures_mnq_mes_mgc_20261025_v6'
 _LOCK=threading.RLock()
 
@@ -136,6 +137,12 @@ def _signals_for_last_extremes(market,bars1m,bars5m):
     return [(st['id'],sig) for st in build(bars1m) if st['id'] in ACTIVE_EXTREMES for sig in st['signals'] if sig['time']==bars1m[-1]['time']]
 
 
+def _signals_for_last_3m(market,bars3m):
+    from vwap_ema_cross import detect
+    return [('vwap_ema_cross_3m',sig) for sig in detect(bars3m,market)
+            if sig['time']==bars3m[-1]['time']]
+
+
 def _entry_indicators(history):
     """Indicators from completed bars available at the time of entry."""
     if len(history)<20:return ('INSUFFICIENT',None,None)
@@ -156,7 +163,7 @@ def _entry_indicators(history):
 
 
 def _engine_strategies(suffix):
-    return ACTIVE_5M if suffix=='5m' else ACTIVE_1M if suffix=='1m' else ACTIVE_EXTREMES
+    return ACTIVE_5M if suffix=='5m' else ACTIVE_1M if suffix=='1m' else ACTIVE_3M if suffix=='3m' else ACTIVE_EXTREMES
 
 
 def _net_target_price(entry,side,target_usd,qty,market):
@@ -209,6 +216,10 @@ def _open_pending(db,market,bar,history,suffix):
         dist=(entry-stop if side=='LONG' else stop-entry)
         if dist<=0 or (side=='LONG' and entry>=tp) or (side=='SHORT' and entry<=tp):
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='GAP_INVALID' WHERE id=?",(t['id'],)); continue
+        if t['strategy']=='vwap_ema_cross_3m':
+            # Rebase the 1.5R target on the actual next 3M candle OPEN fill.
+            # This prevents a gap between signal close and fill from distorting RR.
+            tp=entry+(1.5*dist if side=='LONG' else -1.5*dist)
         if t['strategy']=='bb_rsi_scale' and market in FUTURES:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='CRYPTO_RESEARCH_ONLY' WHERE id=?",(t['id'],));continue
         if market in FUTURES:
@@ -317,7 +328,7 @@ def _progress_key(market, suffix='5m'):
 def _advance_generic(market,bars,signal_lookup,suffix='5m'):
     if market not in MARKETS or not bars:
         return {'processed':0,'reason':'unsupported/no data'}
-    bars=sorted(bars,key=lambda b:b['time']); last=int(bars[-1]['time']); step=60 if suffix in ('1m','extremes') else 300
+    bars=sorted(bars,key=lambda b:b['time']); last=int(bars[-1]['time']); step=60 if suffix in ('1m','extremes') else 180 if suffix=='3m' else 300
     key=_progress_key(market,suffix)
     with _LOCK:
         with conn() as db:
@@ -371,6 +382,17 @@ def advance_opening(market,bars1m,bars5m):
 
 def advance_extremes(market,bars1m,bars5m):
     return _advance_generic(market,bars1m,lambda i:_signals_for_last_extremes(market,bars1m[:i+1],bars5m),'extremes')
+
+
+def advance_vwap_ema(market,bars1m):
+    """Papertrade only NEW completed 3M signals from the delayed 1M feed."""
+    from vwap_ema_cross import to_3m
+    bars3m=to_3m(bars1m)
+    if len(bars3m)<65:
+        return {'processed':0,'reason':'insufficient complete 3m candles'}
+    return _advance_generic(market,bars3m,
+                            lambda i:_signals_for_last_3m(market,bars3m[:i+1]),
+                            '3m')
 
 
 def summary(market=None):
