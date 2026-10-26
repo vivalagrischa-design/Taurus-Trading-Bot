@@ -9,7 +9,7 @@ import os
 MAX_MICROS = int(os.getenv("TAURUS_LUCID_MAX_MICROS", "20"))
 MICRO_MARKETS = frozenset(("nq", "mes", "mgc"))
 
-def allowed_quantity(db, market, side, proposed):
+def allowed_quantity(db, market, side, proposed, exclude_trade_id=None):
     """Return permitted integer micro contracts; zero rejects a new fill.
 
     Pending reservations prevent simultaneous strategies from each assuming
@@ -22,10 +22,12 @@ def allowed_quantity(db, market, side, proposed):
     if MAX_MICROS <= 0:
         return 0
     rows = db.execute(
-        "SELECT market,side,status,qty FROM trades WHERE status IN ('OPEN','PENDING')"
+        "SELECT id,market,side,status,qty FROM trades WHERE status IN ('OPEN','PENDING')"
     ).fetchall()
     used = 0
     for row in rows:
+        if row["id"] == exclude_trade_id:
+            continue
         if row["market"] not in MICRO_MARKETS:
             continue
         if row["status"] == "OPEN":
