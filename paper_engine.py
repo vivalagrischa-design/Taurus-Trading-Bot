@@ -12,7 +12,9 @@ RISK=200.0
 MAX_NOTIONAL=float(os.environ.get('TAURUS_MAX_NOTIONAL_USD','5000'))
 FEE_RATE=float(os.environ.get('TAURUS_PAPER_FEE_RATE','0.001'))
 SLIPPAGE=float(os.environ.get('TAURUS_PAPER_SLIPPAGE','0.0002'))
-FUTURES={'nq':(2.0,1.0),'mes':(5.0,1.0),'mgc':(10.0,1.60)}  # multiplier, Lucid per-contract round-trip commission
+FUTURES={'nq':(2.0,1.0),'mes':(5.0,1.0),'mgc':(10.0,1.60)}
+FUTURES_TICK={'nq':0.25,'mes':0.25,'mgc':0.10}
+FUTURES_SLIP_TICKS=float(os.environ.get('TAURUS_FUTURES_SLIP_TICKS','1'))  # multiplier, Lucid per-contract round-trip commission
 MARKETS=tuple(FUTURES)
 ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed','trend_pullback','trend_pullback_mtf','bb_rsi_scale')
 ACTIVE_1M=('opening_drop','opening_reversal')
@@ -101,9 +103,10 @@ def record_signal(db,trade_id,market,strategy,sig,decision,reason):
       (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason))
 
 
-def _slipped(price,side,is_entry):
+def _slipped(price,side,is_entry,market=None):
     buy=(side=='LONG')==is_entry
-    return price*(1+SLIPPAGE if buy else 1-SLIPPAGE)
+    slip=FUTURES_TICK[market]*FUTURES_SLIP_TICKS if market in FUTURES_TICK else price*SLIPPAGE
+    return price+(slip if buy else -slip)
 
 
 def _signals_for_last_5m(market,bars5m,bars1m=None):
@@ -165,7 +168,7 @@ def _net_target_price(entry,side,target_usd,qty,market):
         exit_price=(target_usd/max(qty,1e-9)+entry*(1+FEE_RATE))/(1-FEE_RATE)
     else:
         exit_price=(entry*(1-FEE_RATE)-target_usd/max(qty,1e-9))/(1+FEE_RATE)
-    return exit_price/(1-SLIPPAGE if side=='LONG' else 1+SLIPPAGE)
+    return (exit_price+(FUTURES_TICK[market]*FUTURES_SLIP_TICKS if side=='LONG' else -FUTURES_TICK[market]*FUTURES_SLIP_TICKS)) if market in FUTURES_TICK else exit_price/(1-SLIPPAGE if side=='LONG' else 1+SLIPPAGE)
 
 
 def _add_scaled_legs(db,market,bar,suffix):
@@ -178,7 +181,7 @@ def _add_scaled_legs(db,market,bar,suffix):
         # Do not increase a losing position when the current open has already breached SL.
         if (side=='SHORT' and open_price>=stop) or (side=='LONG' and open_price<=stop):
             db.execute("UPDATE trades SET scale_pending=0 WHERE id=?",(t['id'],));continue
-        fill=_slipped(open_price,side,True)
+        fill=_slipped(open_price,side,True,market)
         previous=float(t['last_leg_price'] or old_entry)
         if (side=='SHORT' and fill<=previous) or (side=='LONG' and fill>=previous):
             db.execute("UPDATE trades SET scale_pending=0 WHERE id=?",(t['id'],));continue
@@ -202,7 +205,7 @@ def _open_pending(db,market,bar,history,suffix):
     pending=db.execute("SELECT * FROM trades WHERE market=? AND status='PENDING' AND signal_time<? AND strategy IN ("+marks+")",
                        (market,bar['time'],*strategies)).fetchall()
     for t in pending:
-        side=t['side']; entry=_slipped(float(bar['open']),side,True); stop=float(t['signal_stop']); tp=float(t['signal_tp'])
+        side=t['side']; entry=_slipped(float(bar['open']),side,True,market); stop=float(t['signal_stop']); tp=float(t['signal_tp'])
         dist=(entry-stop if side=='LONG' else stop-entry)
         if dist<=0 or (side=='LONG' and entry>=tp) or (side=='SHORT' and entry<=tp):
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='GAP_INVALID' WHERE id=?",(t['id'],)); continue
@@ -210,7 +213,7 @@ def _open_pending(db,market,bar,history,suffix):
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='CRYPTO_RESEARCH_ONLY' WHERE id=?",(t['id'],));continue
         if market in FUTURES:
             multiplier,commission=FUTURES[market]
-            risk_per_unit=abs(entry-stop)*multiplier+commission+2*entry*SLIPPAGE*multiplier
+            risk_per_unit=abs(entry-stop)*multiplier+commission+FUTURES_TICK[market]*FUTURES_SLIP_TICKS*multiplier
             qty=math.floor(RISK/max(risk_per_unit,0.0001))
             fees_est=qty*commission
         else:
@@ -221,6 +224,8 @@ def _open_pending(db,market,bar,history,suffix):
         if t['strategy']=='bb_rsi_scale':
             qty=min(qty,math.floor((MAX_NOTIONAL/3)/max(entry,1e-12)*1e6)/1e6)
             tp=_net_target_price(entry,side,25,qty,market) if qty>0 else tp
+        if qty>0 and _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},tp,market)<=0:
+            db.execute("UPDATE trades SET status='CANCELLED',exit_reason='TP_NOT_PROFITABLE_NET' WHERE id=?",(t['id'],));continue
         risk_plan=qty*risk_per_unit
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
@@ -240,13 +245,13 @@ def _net_break_even_stop(entry,side,market):
         actual_exit=entry*(1+FEE_RATE)/(1-FEE_RATE)
     else:
         actual_exit=entry*(1-FEE_RATE)/(1+FEE_RATE)
-    return actual_exit/(1-SLIPPAGE if side=='LONG' else 1+SLIPPAGE)
+    return (actual_exit+(FUTURES_TICK[market]*FUTURES_SLIP_TICKS if side=='LONG' else -FUTURES_TICK[market]*FUTURES_SLIP_TICKS)) if market in FUTURES_TICK else actual_exit/(1-SLIPPAGE if side=='LONG' else 1+SLIPPAGE)
 
 
 def _estimated_net_at_stop(trade,stop,market):
     """Conservative projected exit P/L: exit-side slippage plus both fees."""
     side=trade['side']; entry=float(trade['entry']); qty=float(trade['qty'])
-    exit_price=_slipped(float(stop),side,False)
+    exit_price=_slipped(float(stop),side,False,market)
     gross=(exit_price-entry)*qty*(1 if side=='LONG' else -1)*(FUTURES[market][0] if market in FUTURES else 1)
     fees=(qty*FUTURES[market][1] if market in FUTURES else (entry+exit_price)*qty*FEE_RATE)
     return round(gross-fees,4)
@@ -297,7 +302,7 @@ def _close_open(db,market,bar,suffix):
             reason='SL'
         else:
             raw=tp; reason='TP'
-        exit_price=_slipped(raw,side,False)
+        exit_price=_slipped(raw,side,False,market)
         gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*multiplier
         fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
         pnl=gross-fees
