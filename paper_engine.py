@@ -298,7 +298,7 @@ def _close_open(db,market,bar,suffix):
         else:
             raw=tp; reason='TP'
         exit_price=_slipped(raw,side,False)
-        gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*(2 if market=='nq' else 1)
+        gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*multiplier
         fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
         pnl=gross-fees
         db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=? WHERE id=?",
