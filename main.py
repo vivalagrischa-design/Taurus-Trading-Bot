@@ -154,7 +154,7 @@ def select_yahoo():
 
 @app.get('/api/paper')
 def paper(market: str = 'all'):
-    if market != 'all' and market not in SYMBOLS and market != 'nq':
+    if market != 'all' and market not in FUTURES:
         raise HTTPException(400, detail='Unbekannter Markt')
     result=summary(None if market=='all' else market)
     result['poll']=last_poll if market=='all' else last_poll.get(market)
