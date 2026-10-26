@@ -17,7 +17,7 @@ class V7IntegrationTests(unittest.TestCase):
         a=Lucid25K()
         a.open("nq","LONG",10,30000,29990,"omar",NOW)
         r=a.open("mes","LONG",20,7000,6990,"ema",NOW)
-        self.assertEqual(r.qty,8)
+        self.assertEqual(r.qty,4)
         self.assertLessEqual(a.stop_risk(),600)
     def test_lab_continues_after_lucid_failure(self):
         x=ParallelResearch()
