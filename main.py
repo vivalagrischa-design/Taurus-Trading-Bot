@@ -160,3 +160,23 @@ def paper(market: str = 'all'):
     result['poll']=last_poll if market=='all' else last_poll.get(market)
     result['delayed_nq']=(market=='nq' or market=='all')
     return result
+
+@app.get('/api/lucid')
+def lucid_status():
+    """Transparent Lucid V7 status: no fabricated trades or account balances."""
+    from lucid_25k_sim import Lucid25K
+    account=Lucid25K()
+    return {
+        'name':'TAURUS Lucid 25K','mode':'SIMULATION_ONLY',
+        'execution_connected':False,'persistent_account_connected':False,
+        'trading_active':False,'starting_balance':account.rules.starting_balance,
+        'profit_target':account.rules.profit_target,'max_loss':account.rules.max_loss,
+        'max_micro_contracts':account.rules.eval_max_micros,
+        'risk_per_trade':account.rules.risk_per_trade,
+        'message':'Lucid risk simulator installed; live paper execution and persistent independent account are not connected.'
+    }
+
+@app.get('/lucid')
+def lucid_page():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TAURUS Lucid</title><style>body{background:#0c1420;color:#e6edf6;font:16px system-ui;margin:0;padding:30px;max-width:900px}a{color:#8bcaff}h1{font-size:32px}.box{background:#19283b;padding:22px;border-radius:12px;margin:16px 0}.warn{color:#ffbc70}dl{display:grid;grid-template-columns:1fr 1fr;gap:12px}dt{color:#b0bdca}dd{margin:0;font-weight:bold}</style></head><body><a href="/">← TAURUS Lab</a><h1>TAURUS Lucid · 25K</h1><div class="box"><h2 class="warn">Simulation vorbereitet · Handel nicht aktiv</h2><p>Die Lucid-Risikoprüfung ist installiert. Ein unabhängiges dauerhaftes Papertrading-Konto und eine eigene Ausführungsengine sind noch nicht verbunden. Es werden hier keine erfundenen Trades oder Gewinne angezeigt.</p></div><div class="box"><h2>Kontoregeln</h2><dl><dt>Startkapital</dt><dd>25’000 USD</dd><dt>Gewinnziel</dt><dd>1’250 USD</dd><dt>Maximalverlust</dt><dd>1’000 USD</dd><dt>Micro-Kontrakte</dt><dd>20</dd><dt>Risikobudget je Trade</dt><dd>200 USD</dd><dt>Ausführung</dt><dd class="warn">Nicht verbunden</dd></dl></div><p><a href="/api/lucid">Status als JSON</a> · <a href="/">Zurück zum Lab</a></p></body></html>""")
