@@ -41,7 +41,7 @@ class TestLucid25K(unittest.TestCase):
         self.assertTrue(x.accepted)
         self.assertEqual(x.qty,10)
         y=a.open("mes","LONG",10,7000,6990,"bounce",NOW)
-        self.assertEqual(y.qty,2)
+        self.assertEqual(y.qty,4)
     def test_eval_consistency(self):
         a=Lucid25K()
         a.balance=26250
