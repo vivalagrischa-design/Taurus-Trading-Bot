@@ -20,7 +20,7 @@ ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
-TEST_VERSION='lucid_futures_mnq_mes_mgc_20261025_v6'
+TEST_VERSION='taurus_v7_zero_start_20261026'
 _LOCK=threading.RLock()
 
 
