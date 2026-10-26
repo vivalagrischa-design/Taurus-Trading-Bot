@@ -243,6 +243,8 @@ def evaluate(bars, bars1m=None, market='nq'):
     result.extend([short_tile,long_tile])
     from bb_rsi import build
     result.extend(build(bars1m or []))
+    from vwap_ema_cross import build as vwap_ema_build
+    result.append(vwap_ema_build(bars1m or [],market))
     from reversal import build as reversal_build
     result.extend(reversal_build(bars))
     result.extend(_simple_repetitive(bars,market))

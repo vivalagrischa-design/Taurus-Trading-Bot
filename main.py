@@ -1,6 +1,6 @@
 import csv,io,threading,logging
 from contextlib import asynccontextmanager
-from paper_engine import advance, advance_opening, advance_extremes, summary
+from paper_engine import advance, advance_opening, advance_extremes, advance_vwap_ema, summary
 from fastapi import FastAPI,File,HTTPException,UploadFile,Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,7 @@ def paper_loop():
                 one=fetch_market(market,'1m')
                 if one['candles'] and not one['error']:
                     last_poll[market+'_bb']=advance_extremes(market,one['candles'],five['candles'])
+                    last_poll[market+'_vwapema']=advance_vwap_ema(market,one['candles'])
                     if market=='nq':
                         last_poll[market+'_opening']=advance_opening(market,one['candles'],five['candles'])
             except Exception as exc:
@@ -42,7 +43,7 @@ async def lifespan(app):
     thread.join(timeout=3)
 
 
-app=FastAPI(title='Taurus Trading Lab',version='1.2.0',lifespan=lifespan)
+app=FastAPI(title='Taurus Trading Lab',version='1.2.1',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory='static'),name='static')
 DATA={'mode':'DEMO','candles':demo_candles()}
 
