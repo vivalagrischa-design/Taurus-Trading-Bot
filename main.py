@@ -22,6 +22,8 @@ def paper_loop():
                     last_poll[market]={'processed':0,'reason':five.get('error') or 'no 5m data'}
                     continue
                 last_poll[market]=advance(market,five['candles'])
+                from lucid_executor import advance as lucid_advance
+                last_poll[market+'_lucid']=lucid_advance(market,five['candles'])
                 one=fetch_market(market,'1m')
                 if one['candles'] and not one['error']:
                     last_poll[market+'_bb']=advance_extremes(market,one['candles'],five['candles'])
@@ -30,11 +32,6 @@ def paper_loop():
             except Exception as exc:
                 logging.exception('Futures paper poll failed for %s',market)
                 last_poll[market]={'processed':0,'reason':str(exc)[:180]}
-        try:
-            from lucid_shadow import sync
-            sync()
-        except Exception:
-            logging.exception('Lucid shadow accounting failed')
         _stop.wait(60)
 
 
@@ -168,9 +165,9 @@ def paper(market: str = 'all'):
 
 @app.get('/api/lucid')
 def lucid_status():
-    from lucid_shadow import sync
+    from lucid_executor import status
     try:
-        return sync()
+        return status()
     except Exception as exc:
         logging.exception('Lucid status failed')
         raise HTTPException(503,'Lucid shadow database not available') from exc
@@ -179,4 +176,4 @@ def lucid_status():
 @app.get('/lucid')
 def lucid_page():
     from fastapi.responses import HTMLResponse
-    return HTMLResponse("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TAURUS Lucid</title><style>body{background:#0c1420;color:#e6edf6;font:16px system-ui;margin:0;padding:30px;max-width:900px}a{color:#8bcaff}h1{font-size:32px}.box{background:#19283b;padding:22px;border-radius:12px;margin:16px 0}.warn{color:#ffbc70}dl{display:grid;grid-template-columns:1fr 1fr;gap:12px}dt{color:#b0bdca}dd{margin:0;font-weight:bold}</style></head><body><a href="/">← TAURUS Lab</a><h1>TAURUS Lucid · 25K</h1><div class="box"><h2 class="warn">Persistentes Shadow-Papertrading · keine eigenen Entries</h2><p>Abgeschlossene TAURUS-Papertrades werden dauerhaft und separat für Lucid bilanziert. Eine eigenständige Lucid-Ausführungsengine ist noch nicht verbunden. Keine Echtgeldorders.</p></div><div class="box"><h2>Kontoregeln</h2><dl><dt>Startkapital</dt><dd>25’000 USD</dd><dt>Gewinnziel</dt><dd>1’250 USD</dd><dt>Maximalverlust</dt><dd>1’000 USD</dd><dt>Micro-Kontrakte</dt><dd>20</dd><dt>Risikobudget je Trade</dt><dd>200 USD</dd><dt>Ausführung</dt><dd class="warn">Nicht verbunden</dd></dl></div><div class="box"><h2>Shadow-Kontostand</h2><p id="balance">Lade gespeicherte Trades…</p><p id="trades"></p></div><script>fetch('/api/lucid').then(r=>{if(!r.ok)throw Error('Status nicht verfügbar');return r.json()}).then(d=>{document.getElementById('balance').textContent='Kontostand: '+d.balance.toFixed(2)+' USD · P/L: '+d.realized_pnl.toFixed(2)+' USD';document.getElementById('trades').textContent='Gespiegelte geschlossene Trades: '+d.mirrored_closed_trades+' · Nach Limit abgelehnt: '+d.rejected_after_lock}).catch(e=>document.getElementById('balance').textContent=e.message)</script><p><a href="/api/lucid">Status als JSON</a> · <a href="/">Zurück zum Lab</a></p></body></html>""")
+    return HTMLResponse("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TAURUS Lucid</title><style>body{background:#0c1420;color:#e6edf6;font:16px system-ui;margin:0;padding:30px;max-width:900px}a{color:#8bcaff}h1{font-size:32px}.box{background:#19283b;padding:22px;border-radius:12px;margin:16px 0}.warn{color:#ffbc70}dl{display:grid;grid-template-columns:1fr 1fr;gap:12px}dt{color:#b0bdca}dd{margin:0;font-weight:bold}</style></head><body><a href="/">← TAURUS Lab</a><h1>TAURUS Lucid · 25K</h1><div class="box"><h2 class="warn">Eigenständiges Lucid-Papertrading</h2><p>Lucid erkennt Signale selbstständig, eröffnet und schliesst eigene simulierte Trades und speichert den Kontostand dauerhaft. Verzögerte Marktdaten, keine Echtgeldorders.</p></div><div class="box"><h2>Kontoregeln</h2><dl><dt>Startkapital</dt><dd>25’000 USD</dd><dt>Gewinnziel</dt><dd>1’250 USD</dd><dt>Maximalverlust</dt><dd>1’000 USD</dd><dt>Micro-Kontrakte</dt><dd>20</dd><dt>Risikobudget je Trade</dt><dd>200 USD</dd><dt>Ausführung</dt><dd>Papertrading aktiv</dd></dl></div><div class="box"><h2>Shadow-Kontostand</h2><p id="balance">Lade gespeicherte Trades…</p><p id="trades"></p></div><script>fetch('/api/lucid').then(r=>{if(!r.ok)throw Error('Status nicht verfügbar');return r.json()}).then(d=>{document.getElementById('balance').textContent='Kontostand: '+d.balance.toFixed(2)+' USD · P/L: '+d.realized_pnl.toFixed(2)+' USD';document.getElementById('trades').textContent='Geschlossene Trades: '+d.closed_trades+' · Offene Trades: '+d.open_trades+' · Handelssperre: '+(d.locked?'JA':'NEIN')}).catch(e=>document.getElementById('balance').textContent=e.message)</script><p><a href="/api/lucid">Status als JSON</a> · <a href="/">Zurück zum Lab</a></p></body></html>""")
