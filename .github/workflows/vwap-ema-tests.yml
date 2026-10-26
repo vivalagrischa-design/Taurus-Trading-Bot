@@ -1,0 +1,17 @@
+name: VWAP EMA 3M research tests
+on:
+  pull_request:
+    paths:
+      - 'vwap_ema_cross.py'
+      - 'test_vwap_ema_cross.py'
+      - '.github/workflows/vwap-ema-tests.yml'
+  workflow_dispatch:
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest -v test_vwap_ema_cross.py
