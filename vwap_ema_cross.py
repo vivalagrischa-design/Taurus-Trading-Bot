@@ -84,7 +84,7 @@ def detect(bars3m, market='nq', ema_period=None):
             vwaps[i] = cum_pv / cum_v
     signals = []
     for i in range(p, len(bars3m)):
-        if sessions[i] != sessions[i-1]:
+        if sessions[i] != sessions[i-1] or int(bars3m[i]['time'])-int(bars3m[i-1]['time'])!=180:
             continue
         a, b, av, bv = emas[i-1], emas[i], vwaps[i-1], vwaps[i]
         if None in (a,b,av,bv):
