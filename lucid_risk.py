@@ -13,9 +13,8 @@ def allowed_quantity(db, market, side, proposed, exclude_trade_id=None):
     """Return permitted integer micro contracts; zero rejects a new fill.
 
     Pending reservations prevent simultaneous strategies from each assuming
-    they own the same capacity. The current trade being filled is excluded
-    from reservations by its market+side only at the caller's discretion;
-    here we conservatively count all pending orders, including the caller.
+    they own the same capacity. The trade currently being filled is excluded by its id; other pending
+    trades each reserve one contract.
     """
     if market not in MICRO_MARKETS or side not in ("LONG", "SHORT"):
         return 0
