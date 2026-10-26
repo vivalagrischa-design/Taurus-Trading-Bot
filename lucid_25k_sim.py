@@ -21,8 +21,8 @@ class AccountRules:
     funded_scale_profit: float = 1_000.0
     eval_consistency: float = 0.40
     daily_loss_limit: float | None = None  # LucidFlex DLL ON amount MUST be verified at checkout
-    risk_per_trade: float = 100.0  # TAURUS internal, not Lucid rule
-    max_open_stop_risk: float = 300.0  # TAURUS internal, not Lucid rule
+    risk_per_trade: float = 200.0  # TAURUS internal, not Lucid rule
+    max_open_stop_risk: float = 600.0  # TAURUS internal, not Lucid rule
     max_daily_loss_internal: float = 400.0  # TAURUS internal, not Lucid rule
     # For new trades only; broker mandates liquidation by 16:45 NY.
     new_entry_cutoff: time = time(16, 40)
