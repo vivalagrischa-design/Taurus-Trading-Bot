@@ -249,6 +249,8 @@ def evaluate(bars, bars1m=None, market='nq'):
     result.extend(build(bars1m or []))
     from reversal import build as reversal_build
     result.extend(reversal_build(bars))
+    from rosi_strategy import build as rosi_build
+    result.extend(rosi_build(bars,market))
     result.extend(_simple_repetitive(bars,market))
     from trend_pullback_mtf import build as trend_mtf_build
     result.append(trend_mtf_build(bars))

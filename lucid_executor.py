@@ -13,7 +13,7 @@ LOCK=threading.RLock()
 NY=ZoneInfo('America/New_York')
 VERSION='lucid_independent_25k_v1'
 START=25000.
-SELECTED=('omar_v2_volume_retest','ema20','trend_pullback','bb_rsi_short','bb_rsi_long')
+SELECTED=('rev_engulfing','rev_bounce','trend_pullback','bb_only_short')
 MAX_QTY=20
 RISK=200.
 DAY_STOP=400.
@@ -23,12 +23,25 @@ def setup(db):
        version TEXT PRIMARY KEY,balance DOUBLE PRECISION NOT NULL,
        peak DOUBLE PRECISION NOT NULL,floor DOUBLE PRECISION NOT NULL,
        session_day TEXT,session_start DOUBLE PRECISION,locked INTEGER NOT NULL DEFAULT 0,
-       last_bar_nq BIGINT,last_bar_mes BIGINT,last_bar_mgc BIGINT)""")
+       last_bar_nq BIGINT,last_bar_mes BIGINT,last_bar_mgc BIGINT,
+        last_bar_1m_nq BIGINT,last_bar_1m_mes BIGINT,last_bar_1m_mgc BIGINT)""")
     db.execute("""CREATE TABLE IF NOT EXISTS lucid_orders(
        id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,
        signal_time BIGINT,entry_time BIGINT,exit_time BIGINT,
        entry DOUBLE PRECISION,stop DOUBLE PRECISION,tp DOUBLE PRECISION,
-       qty INTEGER,status TEXT,pnl DOUBLE PRECISION,exit_reason TEXT)""")
+       qty INTEGER,status TEXT,pnl DOUBLE PRECISION,exit_reason TEXT,
+        timeframe TEXT NOT NULL DEFAULT '5m')""")
+    # Additive migrations for existing Lucid accounts and paper orders.
+    from paper_engine import PgConnection
+    for col in ('last_bar_1m_nq','last_bar_1m_mes','last_bar_1m_mgc'):
+        if isinstance(db,PgConnection):
+            db.execute('ALTER TABLE lucid_account ADD COLUMN IF NOT EXISTS '+col+' BIGINT')
+        elif col not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_account)')}:
+            db.execute('ALTER TABLE lucid_account ADD COLUMN '+col+' BIGINT')
+    if isinstance(db,PgConnection):
+        db.execute("ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '5m'")
+    elif 'timeframe' not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
+        db.execute("ALTER TABLE lucid_orders ADD COLUMN timeframe TEXT NOT NULL DEFAULT '5m'")
     db.execute("""INSERT INTO lucid_account(version,balance,peak,floor,session_start,locked)
        VALUES(?,?,?,?,?,0) ON CONFLICT(version) DO NOTHING""",(VERSION,START,START,START-1000,START))
 
@@ -52,7 +65,7 @@ def _close(db,trade,bar):
     if not (hit_sl or hit_tp):
         dist=abs(float(trade['entry'])-stop)
         favorable=(float(bar['close'])-float(trade['entry']))*(1 if side=='LONG' else -1)
-        if dist>0 and favorable>=dist:
+        if trade['strategy']!='rev_bounce' and dist>0 and favorable>=dist:
             candidate=float(bar['close'])-(1 if side=='LONG' else -1)*dist
             stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
             db.execute('UPDATE lucid_orders SET stop=? WHERE id=?',(stop,trade['id']))
@@ -90,10 +103,11 @@ def _open(db,trade,bar):
         db.execute("UPDATE lucid_orders SET status='CANCELLED',exit_reason='CAPACITY_OR_RISK' WHERE id=?",(trade['id'],));return
     db.execute("UPDATE lucid_orders SET status='OPEN',entry_time=?,entry=?,qty=? WHERE id=?",(bar['time'],entry,qty,trade['id']))
 
-def advance(market,bars):
-    if market not in FUTURES or not bars:return {'processed':0}
+def advance(market,bars,interval='5m'):
+    if market not in FUTURES or not bars or interval not in ('5m','1m'):
+        return {'processed':0}
     bars=sorted(bars,key=lambda x:x['time'])
-    col='last_bar_'+market
+    col=('last_bar_'+market) if interval=='5m' else ('last_bar_1m_'+market)
     with LOCK:
         with conn() as db:
             setup(db)
@@ -105,22 +119,29 @@ def advance(market,bars):
             for i,bar in enumerate(bars):
                 if int(bar['time'])<=last:continue
                 _session(db,a,int(bar['time']))
-                pending=db.execute("SELECT * FROM lucid_orders WHERE market=? AND status='PENDING' AND signal_time<? ORDER BY signal_time",(market,bar['time'])).fetchall()
+                pending=db.execute("SELECT * FROM lucid_orders WHERE market=? AND timeframe=? AND status='PENDING' AND signal_time<? ORDER BY signal_time",(market,interval,bar['time'])).fetchall()
                 for trade in pending:_open(db,trade,bar)
-                active=db.execute("SELECT * FROM lucid_orders WHERE market=? AND status='OPEN' AND entry_time<=?",(market,bar['time'])).fetchall()
+                active=db.execute("SELECT * FROM lucid_orders WHERE market=? AND timeframe=? AND status='OPEN' AND entry_time<=?",(market,interval,bar['time'])).fetchall()
                 for trade in active:_close(db,trade,bar)
                 # Only signals generated from data available at this completed bar.
-                if i>=75:
-                    for tile in evaluate(bars[:i+1],market=market):
+                if i>=(75 if interval=='5m' else 320):
+                    if interval=='5m':
+                        tiles=evaluate(bars[:i+1],market=market)
+                    else:
+                        from bb_rsi import build as bb_build
+                        tiles=bb_build(bars[max(0,i-450):i+1])
+                    for tile in tiles:
                         if tile['id'] not in SELECTED:continue
+                        if interval=='5m' and tile['id']=='bb_only_short':continue
+                        if interval=='1m' and tile['id']!='bb_only_short':continue
                         for sig in tile.get('signals',[]):
                             if int(sig['time'])!=int(bar['time']):continue
                             side=sig['side'];stop=float(sig['stop']);tp=float(sig['tp'])
                             if side not in ('LONG','SHORT'):continue
                             ident=f"{VERSION}:{market}:{tile['id']}:{int(bar['time'])}:{side}"
-                            db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty)
-                               VALUES(?,?,?,?,?,?,?,'PENDING',0) ON CONFLICT(id) DO NOTHING""",
-                               (ident,market,tile['id'],side,int(bar['time']),stop,tp))
+                            db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty,timeframe)
+                               VALUES(?,?,?,?,?,?,?,'PENDING',0,?) ON CONFLICT(id) DO NOTHING""",
+                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval))
                 db.execute('UPDATE lucid_account SET '+col+'=? WHERE version=?',(int(bar['time']),VERSION))
                 a=db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone()
                 processed+=1
@@ -141,4 +162,5 @@ def status():
                     'closed_trades':sum(x['status']=='CLOSED' for x in rows),
                     'trades':rows,'max_micro_contracts':MAX_QTY,'risk_per_trade':RISK,
                     'last_processed':{m:a['last_bar_'+m] for m in FUTURES},
+                     'last_processed_1m':{m:a['last_bar_1m_'+m] for m in FUTURES},
                     'warning':'Independent delayed-data paper execution; not real-time, not broker-connected; fills are simulated.'}

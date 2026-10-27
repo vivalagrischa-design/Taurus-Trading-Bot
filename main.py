@@ -26,6 +26,7 @@ def paper_loop():
                 last_poll[market+'_lucid']=lucid_advance(market,five['candles'])
                 one=fetch_market(market,'1m')
                 if one['candles'] and not one['error']:
+                    last_poll[market+'_lucid_1m']=lucid_advance(market,one['candles'],interval='1m')
                     last_poll[market+'_bb']=advance_extremes(market,one['candles'],five['candles'])
                     if market=='nq':
                         last_poll[market+'_opening']=advance_opening(market,one['candles'],five['candles'])
