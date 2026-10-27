@@ -28,7 +28,7 @@ def setup(db):
     db.execute("""CREATE TABLE IF NOT EXISTS lucid_orders(
        id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,
        signal_time BIGINT,entry_time BIGINT,exit_time BIGINT,
-       entry DOUBLE PRECISION,stop DOUBLE PRECISION,tp DOUBLE PRECISION,
+       entry DOUBLE PRECISION,stop DOUBLE PRECISION,initial_stop DOUBLE PRECISION,tp DOUBLE PRECISION,
        qty INTEGER,status TEXT,pnl DOUBLE PRECISION,exit_reason TEXT,
         timeframe TEXT NOT NULL DEFAULT '5m')""")
     # Additive migrations for existing Lucid accounts and paper orders.
@@ -42,6 +42,10 @@ def setup(db):
         db.execute("ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS timeframe TEXT NOT NULL DEFAULT '5m'")
     elif 'timeframe' not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
         db.execute("ALTER TABLE lucid_orders ADD COLUMN timeframe TEXT NOT NULL DEFAULT '5m'")
+    if isinstance(db,PgConnection):
+        db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS initial_stop DOUBLE PRECISION')
+    elif 'initial_stop' not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
+        db.execute('ALTER TABLE lucid_orders ADD COLUMN initial_stop DOUBLE PRECISION')
     db.execute("""INSERT INTO lucid_account(version,balance,peak,floor,session_start,locked)
        VALUES(?,?,?,?,?,0) ON CONFLICT(version) DO NOTHING""",(VERSION,START,START,START-1000,START))
 
@@ -63,10 +67,11 @@ def _close(db,trade,bar):
     hit_sl=float(bar['low'])<=stop if side=='LONG' else float(bar['high'])>=stop
     hit_tp=float(bar['high'])>=tp if side=='LONG' else float(bar['low'])<=tp
     if not (hit_sl or hit_tp):
-        dist=abs(float(trade['entry'])-stop)
+        initial_stop=float(trade.get('initial_stop') or stop)
+        initial_r=abs(float(trade['entry'])-initial_stop)
         favorable=(float(bar['close'])-float(trade['entry']))*(1 if side=='LONG' else -1)
-        if trade['strategy']!='rev_bounce' and dist>0 and favorable>=dist:
-            candidate=float(bar['close'])-(1 if side=='LONG' else -1)*dist
+        if trade['strategy']!='rev_bounce' and initial_r>0 and favorable>=initial_r:
+            candidate=float(bar['close'])-(1 if side=='LONG' else -1)*initial_r
             stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
             db.execute('UPDATE lucid_orders SET stop=? WHERE id=?',(stop,trade['id']))
         return
@@ -101,7 +106,7 @@ def _open(db,trade,bar):
     qty=min(available,int(maxrisk//risk_unit)) if risk_unit>0 else 0
     if qty<=0:
         db.execute("UPDATE lucid_orders SET status='CANCELLED',exit_reason='CAPACITY_OR_RISK' WHERE id=?",(trade['id'],));return
-    db.execute("UPDATE lucid_orders SET status='OPEN',entry_time=?,entry=?,qty=? WHERE id=?",(bar['time'],entry,qty,trade['id']))
+    db.execute("UPDATE lucid_orders SET status='OPEN',entry_time=?,entry=?,qty=?,initial_stop=? WHERE id=?",(bar['time'],entry,qty,stop,trade['id']))
 
 def advance(market,bars,interval='5m'):
     if market not in FUTURES or not bars or interval not in ('5m','1m'):
