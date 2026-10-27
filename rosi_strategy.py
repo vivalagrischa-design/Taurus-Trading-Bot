@@ -36,10 +36,12 @@ def _previous_levels(bars):
         dt=datetime.fromtimestamp(ts,timezone.utc).astimezone(NY)
         prior=max((d for d in complete if d<day),default=None)
         result.append(complete[prior] if prior is not None else None)
-        entry=data.setdefault(day,{'high':float(b['high']),'low':float(b['low'])})
+        entry=data.setdefault(day,{'high':float(b['high']),'low':float(b['low']),
+                                  'start_ok':dt.hour==18 and dt.minute==0,'count':0})
+        entry['count']+=1
         entry['high']=max(entry['high'],float(b['high']))
         entry['low']=min(entry['low'],float(b['low']))
-        if dt.hour==16 and dt.minute==55:
+        if dt.hour==16 and dt.minute==55 and entry['start_ok'] and entry['count']>=240:
             complete[day]=(entry['high'],entry['low'])
     return result
 
