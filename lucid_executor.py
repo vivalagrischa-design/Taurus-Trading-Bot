@@ -65,7 +65,7 @@ def _close(db,trade,bar):
     if not (hit_sl or hit_tp):
         dist=abs(float(trade['entry'])-stop)
         favorable=(float(bar['close'])-float(trade['entry']))*(1 if side=='LONG' else -1)
-        if dist>0 and favorable>=dist:
+        if trade['strategy']!='rev_bounce' and dist>0 and favorable>=dist:
             candidate=float(bar['close'])-(1 if side=='LONG' else -1)*dist
             stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
             db.execute('UPDATE lucid_orders SET stop=? WHERE id=?',(stop,trade['id']))
