@@ -228,6 +228,8 @@ def evaluate(bars, bars1m=None, market='nq'):
     current=osigs[-1] if osigs else None
     trend_up=e20[-1]>e50[-1];trend_down=e20[-1]<e50[-1]
     result.append(tile('omar','Omar Breakout / Retest','green' if current and current['time']==bars[-1]['time'] else 'yellow' if 'RETEST' in o['stage'] else 'neutral',o['stage'],osigs,[('1H-Trend','green' if trend_up or trend_down else 'neutral'),('Level gefunden','green' if o.get('level') else 'neutral'),('Retest','green' if current and current['time']==bars[-1]['time'] else 'neutral')]))
+    from omar_volume_retest import build as omar_v2_build
+    result.append(omar_v2_build(bars,market))
     ema_sigs=[];rsi_sigs=[]
     for i in range(51,len(bars)):
         if e20[i]>e50[i] and closes[i-1]<=e20[i-1] and closes[i]>e20[i]:ema_sigs.append(signal('ema20','LONG',bars,i,'EMA20-Rückeroberung bei EMA20 > EMA50',e20[i]))
