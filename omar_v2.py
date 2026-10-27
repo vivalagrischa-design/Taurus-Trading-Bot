@@ -65,11 +65,11 @@ def _levels(bars,i):
 def signals(bars,market='nq'):
     if market not in TICK or len(bars)<150:return []
     out=[];used=set()
-    for i in range(145,len(bars)):
+    for i in range(max(145,len(bars)-35),len(bars)):
         b=bars[i];prev=bars[i-1]
         # At time i the current 1H candle is not closed until its last 5M bar.
         # Only completed hours in the prefix can influence the trend.
-        if not _uptrend(bars[:i+1]):continue
+        if not _uptrend(bars[max(0,i-360):i+1]):continue
         prior_vol=[float(x.get('volume') or 0) for x in bars[i-20:i]]
         if any(v<=0 for v in prior_vol):continue
         base=median(prior_vol)
@@ -86,7 +86,7 @@ def signals(bars,market='nq'):
             if int(x['time'])-int(b['time'])!=(j-i)*300:break
             if float(x['close'])<level-tolerance:break
             if float(x['low'])<=level+tolerance and float(x['close'])>level and float(x['close'])>float(x['open']):
-                if not _uptrend(bars[:j+1]):break
+                if not _uptrend(bars[max(0,j-360):j+1]):break
                 stop=min(float(z['low']) for z in bars[i:j+1])-TICK[market]
                 entry=float(x['close'])
                 if stop>=entry:break
