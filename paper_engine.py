@@ -16,7 +16,7 @@ FUTURES={'nq':(2.0,1.0),'mes':(5.0,1.0),'mgc':(10.0,1.60)}
 FUTURES_TICK={'nq':0.25,'mes':0.25,'mgc':0.10}
 FUTURES_SLIP_TICKS=float(os.environ.get('TAURUS_FUTURES_SLIP_TICKS','1'))  # multiplier, Lucid per-contract round-trip commission
 MARKETS=tuple(FUTURES)
-ACTIVE_5M=('omar','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed','trend_pullback','trend_pullback_mtf','bb_rsi_scale')
+ACTIVE_5M=('omar','omar_v2_volume_retest','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed','trend_pullback','trend_pullback_mtf','bb_rsi_scale')
 ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
@@ -215,10 +215,9 @@ def _open_pending(db,market,bar,history,suffix):
             multiplier,commission=FUTURES[market]
             risk_per_unit=abs(entry-stop)*multiplier+commission+FUTURES_TICK[market]*FUTURES_SLIP_TICKS*multiplier
             qty=math.floor(RISK/max(risk_per_unit,0.0001))
-            # Lucid paper account: aggregate open + pending futures positions,
-            # not merely per-strategy size. Fail closed if capacity is exhausted.
-            from lucid_risk import allowed_quantity
-            qty=allowed_quantity(db, market, side, qty, exclude_trade_id=t['id'])
+            # TAURUS LAB is an independent strategy research ledger.
+            # Its quantity is set ONLY by the 200 USD per-trade risk budget.
+            # Lucid contract/account limits belong exclusively to lucid_executor.py.
             fees_est=qty*commission
         else:
             risk_per_unit=dist+entry*FEE_RATE+stop*FEE_RATE+entry*SLIPPAGE+stop*SLIPPAGE

@@ -19,3 +19,24 @@ jobs:
         run: |
           python -m unittest -v test_lucid_25k_sim test_v7_session_policy
           python -m unittest discover -s tests -p 'test_*.py' -v
+          python -m unittest -v test_lab_lucid_separation test_audit_engulfing_regime test_omar_v2
+
+      - name: Snapshot current live LAB and Lucid before any deploy
+        run: |
+          mkdir -p taurus-live-backup
+          curl --fail --silent --show-error --retry 3 --max-time 30 'https://taurus-trading-bot.onrender.com/api/paper' -o taurus-live-backup/lab.json
+          curl --fail --silent --show-error --retry 3 --max-time 30 'https://taurus-trading-bot.onrender.com/api/lucid' -o taurus-live-backup/lucid.json
+          python - <<'PY'
+          import json
+          lab=json.load(open('taurus-live-backup/lab.json'))
+          lucid=json.load(open('taurus-live-backup/lucid.json'))
+          assert isinstance(lab.get('trades'),list)
+          assert isinstance(lucid.get('trades'),list)
+          print('LAB export:',len(lab['trades']),'trades; persistence:',lab.get('persistence'))
+          print('Lucid export:',len(lucid['trades']),'trades')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taurus-live-before-omar-v2
+          path: taurus-live-backup/
+          retention-days: 30
