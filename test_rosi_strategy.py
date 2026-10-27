@@ -35,7 +35,8 @@ class RosiLabTests(unittest.TestCase):
         self.assertEqual(set(tiles),set(SESSIONS))
         for key in SESSIONS:
             sigs=tiles[key]['signals']
-            self.assertEqual(len(sigs),1,(key,sigs))
+            # Frankfurt 08–10 CET overlaps London 08–10 GMT by one hour.
+            self.assertEqual(len(sigs),2 if key=='rosi_frankfurt' else 1,(key,sigs))
             sig=sigs[0]
             self.assertEqual(sig['side'],'SHORT')
             self.assertEqual(sig['stop'],111.25)
