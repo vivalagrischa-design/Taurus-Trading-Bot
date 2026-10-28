@@ -436,6 +436,42 @@ def advance_extremes(market,bars1m,bars5m):
     return _advance_generic(market,bars1m,lambda i:_signals_for_last_extremes(market,bars1m[:i+1],bars5m),'extremes')
 
 
+
+def scan_summary(system='lab',market=None,run_id=None):
+    if system not in ('lab','lucid'):
+        raise ValueError('system must be lab or lucid')
+    if run_id is None:
+        if system=='lab':run_id=TEST_VERSION
+        else:
+            from lucid_executor import VERSION as run_id
+    with _LOCK:
+        with conn() as db:
+            sql='SELECT * FROM strategy_scans WHERE system=? AND run_id=?'
+            params=[system,run_id]
+            if market in MARKETS:
+                sql+=' AND market=?';params.append(market)
+            sql+=' ORDER BY bar_time'
+            rows=db.execute(sql,params).fetchall()
+    grouped={}
+    for row in rows:
+        r=dict(row);key=(r['strategy'],r['market'],r['timeframe'])
+        item=grouped.setdefault(key,{'strategy':r['strategy'],'market':r['market'],'timeframe':r['timeframe'],
+            'bars_scanned':0,'signal_bars':0,'phases':{},'checks':{},'latest':None})
+        item['bars_scanned']+=1;item['signal_bars']+=int(r['current_signals'] or 0)
+        try:context=json.loads(r['context'] or '{}')
+        except Exception:context={}
+        phase=context.get('phase','unknown')
+        item['phases'][phase]=item['phases'].get(phase,0)+1
+        try:checks=json.loads(r['checks'] or '[]')
+        except Exception:checks=[]
+        for label,state in checks:
+            counts=item['checks'].setdefault(label,{})
+            counts[state]=counts.get(state,0)+1
+        item['latest']={'bar_time':int(r['bar_time']),'state':r['state'],'details':r['details'],
+            'phase':phase,'checks':checks,'current_signals':int(r['current_signals'] or 0)}
+    return {'system':system,'run_id':run_id,'market':market or 'all','strategies':list(grouped.values()),
+            'bars_scanned':len(rows),'source':'per-candle strategy status checks'}
+
 def summary(market=None):
     with _LOCK:
         with conn() as db:
