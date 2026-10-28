@@ -15,7 +15,8 @@ def memory_db():
       trail_updates INTEGER,scale_legs INTEGER,scale_pending INTEGER,
       last_leg_price REAL,initial_stop REAL,exit_time INTEGER,exit REAL,
       pnl REAL,exit_reason TEXT,stop_net_estimate REAL,break_even_stop REAL,
-      risk_plan REAL)""")
+      risk_plan REAL,exit_context TEXT,exit_reference REAL,exit_slippage_usd REAL,
+      gross_pnl REAL,fees_paid REAL)""")
     return db
 
 
