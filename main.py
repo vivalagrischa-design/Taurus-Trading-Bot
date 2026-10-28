@@ -179,6 +179,41 @@ def strategy_scans(system: str = 'lab', market: str = 'all'):
         raise HTTPException(503,'Strategie-Scan-Auswertung nicht verfügbar') from exc
 
 
+@app.get('/api/archive/day')
+def archive_day(date: str = Query(..., pattern=r'^\\d{4}-\\d{2}-\\d{2}
+def lucid_status():
+    from lucid_executor import status
+    try:
+        return status()
+    except Exception as exc:
+        logging.exception('Lucid status failed')
+        raise HTTPException(503,'Lucid shadow database not available') from exc
+
+
+
+@app.get('/api/lucid/analytics')
+def lucid_analytics():
+    from lucid_executor import analytics
+    try:
+        return analytics()
+    except Exception as exc:
+        logging.exception('Lucid analytics failed')
+        raise HTTPException(503,'Lucid-Auswertung nicht verfügbar') from exc
+
+
+@app.get('/lucid')
+def lucid_page():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse("""<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TAURUS Lucid</title><style>body{background:#0c1420;color:#e6edf6;font:16px system-ui;margin:0;padding:24px;max-width:1100px}a{color:#8bcaff}h1{font-size:30px}.box{background:#19283b;padding:18px;border-radius:12px;margin:14px 0;overflow:auto}.warn{color:#ffbc70}dl{display:grid;grid-template-columns:1fr 1fr;gap:10px}dt{color:#b0bdca}dd{margin:0;font-weight:bold}table{border-collapse:collapse;width:100%;min-width:850px}th,td{text-align:left;padding:9px;border-bottom:1px solid #35465c;white-space:nowrap}.pos{color:#38d3a1}.neg{color:#ff7185}.muted{color:#b0bdca}</style></head><body><a href="/">← TAURUS Lab</a> · <a href="/static/results.html">Strategie-Grafiken</a><h1>TAURUS Lucid · 25K</h1><div class="box"><h2 class="warn">Eigenständiges Lucid-Papertrading</h2><p>Verzögerte Marktdaten, simulierte Ausführung, keine Echtgeldorders.</p></div><div class="box"><h2>Kontoregeln</h2><dl><dt>Startkapital</dt><dd>25’000 USD</dd><dt>Gewinnziel</dt><dd>1’250 USD</dd><dt>Maximalverlust</dt><dd>1’000 USD</dd><dt>Micro-Kontrakte</dt><dd>20</dd><dt>Risikobudget je Trade</dt><dd>200 USD</dd><dt>Ausführung</dt><dd>Papertrading</dd></dl></div><div class="box"><h2>Kontostand</h2><p id="balance">Lade…</p><p id="counts"></p></div><div class="box"><h2>Lucid Trades</h2><p class="muted">Neueste Trades zuerst · Signale, offene, geschlossene und stornierte Trades.</p><table><thead><tr><th>Zeit Signal</th><th>Markt</th><th>Strategie</th><th>Richtung</th><th>Entry</th><th>Stop</th><th>Exit</th><th>Kontrakte</th><th>Status</th><th>P/L</th><th>Grund</th></tr></thead><tbody id="rows"></tbody></table></div><p><a href="/api/lucid">Status als JSON</a></p><script>const esc=x=>String(x??'—').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));function dt(t){return t?new Date(Number(t)*1000).toLocaleString('de-CH'):'—'}fetch('/api/lucid').then(r=>{if(!r.ok)throw Error('Status nicht verfügbar');return r.json()}).then(d=>{document.getElementById('balance').textContent='Kontostand: '+Number(d.balance).toFixed(2)+' USD · P/L: '+Number(d.realized_pnl).toFixed(2)+' USD · Handelssperre: '+(d.locked?'JA':'NEIN');document.getElementById('counts').textContent='Geschlossen: '+d.closed_trades+' · Offen: '+d.open_trades+' · Strategien: '+(d.selected_strategies||[]).join(', ');document.getElementById('rows').innerHTML=(d.trades||[]).map(t=>'<tr><td>'+dt(t.signal_time)+'</td><td>'+esc(t.market)+'</td><td>'+esc(t.strategy)+'</td><td>'+esc(t.side)+'</td><td>'+esc(t.entry)+'</td><td>'+esc(t.stop)+'</td><td>'+esc(t.exit_time?dt(t.exit_time):'—')+'</td><td>'+esc(t.qty)+'</td><td>'+esc(t.status)+'</td><td class="'+(Number(t.pnl)>=0?'pos':'neg')+'">'+(t.pnl==null?'—':Number(t.pnl).toFixed(2)+' USD')+'</td><td>'+esc(t.exit_reason)+'</td></tr>').join('')||'<tr><td colspan="11">Noch keine Lucid-Trades oder Signale gespeichert.</td></tr>'}).catch(e=>document.getElementById('balance').textContent=e.message)</script></body></html>""")
+)):
+    """Daily read-only export used by the GitHub archival workflow."""
+    from daily_archive import daily_snapshot
+    try:
+        return daily_snapshot(date)
+    except ValueError as exc:
+        raise HTTPException(400,detail=str(exc)) from exc
+
+
 @app.get('/api/lucid')
 def lucid_status():
     from lucid_executor import status
