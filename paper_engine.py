@@ -3,6 +3,8 @@ Signal bar close -> next bar OPEN. Stops take priority on ambiguous OHLC bars.
 State persisted in SQLite/PostgreSQL. Single process required.
 """
 import os,sqlite3,threading,math,time,json
+from datetime import datetime,timezone
+from zoneinfo import ZoneInfo
 from strategies import evaluate
 from setup_quality import score_signal
 
@@ -326,15 +328,29 @@ def _progress_key(market, suffix='5m'):
 def _trade_context(bars,stamp,timeframe='5m'):
     prior=[b for b in bars if int(b['time'])<=int(stamp)]
     minutes=1 if timeframe=='1m' else 5
-    horizon=max(1,60//minutes)
-    tail=prior[-max(25,horizon+1):]
+    windows={15:max(1,15//minutes),60:max(1,60//minutes),240:max(1,240//minutes)}
+    tail=prior[-(windows[240]+1):]
     if not tail:return {'phase':'unknown','reason':'no_prior_candles','timeframe':timeframe,'candles':[]}
     closes=[float(b['close']) for b in tail]
-    change=(closes[-1]-closes[-1-horizon])/closes[-1-horizon] if len(closes)>horizon and closes[-1-horizon] else None
-    phase=('up' if change is not None and change>0.001 else 'down' if change is not None and change<-.001 else 'sideways' if change is not None else 'unknown')
+    def ret(horizon):
+        if len(closes)<=horizon or not closes[-1-horizon]:return None
+        return (closes[-1]-closes[-1-horizon])/closes[-1-horizon]
+    r15,r60,r240=(ret(windows[n]) for n in (15,60,240))
+    phase=('up' if r60 is not None and r60>0.001 else 'down' if r60 is not None and r60<-.001 else 'sideways' if r60 is not None else 'unknown')
+    hour_bars=tail[-(windows[60]+1):]
+    mean_close=sum(float(b['close']) for b in hour_bars)/len(hour_bars)
+    range_60m=(max(float(b['high']) for b in hour_bars)-min(float(b['low']) for b in hour_bars))/mean_close if mean_close else None
+    moves=[abs(float(hour_bars[j]['close'])-float(hour_bars[j-1]['close'])) for j in range(1,len(hour_bars))]
+    efficiency=abs(float(hour_bars[-1]['close'])-float(hour_bars[0]['close']))/sum(moves) if moves and sum(moves)>0 else None
     last=tail[-1]; rng=max(float(last['high'])-float(last['low']),1e-12); body=abs(float(last['close'])-float(last['open']))
-    return {'phase':phase,'timeframe':timeframe,'return_60m':change,'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in tail]}
-
+    local=datetime.fromtimestamp(int(stamp),timezone.utc).astimezone(ZoneInfo('America/New_York'))
+    minute=local.hour*60+local.minute
+    session='premarket' if minute<570 else 'regular' if minute<960 else 'after_hours'
+    stored=tail[-25:]
+    return {'phase':phase,'timeframe':timeframe,'return_15m':r15,'return_60m':r60,'return_240m':r240,
+            'range_60m_pct':range_60m,'efficiency_ratio_60m':efficiency,'ny_session':session,
+            'ny_hour':local.hour,'weekday':local.weekday(),'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},
+            'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in stored]}
 
 def _advance_generic(market,bars,signal_lookup,suffix='5m'):
     if market not in MARKETS or not bars:
@@ -405,7 +421,7 @@ def summary(market=None):
             sql='SELECT * FROM trades WHERE signal_time>=?'; params=[started]
             if market in MARKETS:
                 sql+=' AND market=?'; params.append(market)
-            sql+=' ORDER BY signal_time DESC LIMIT 700'
+            sql+=' ORDER BY signal_time DESC'
             trades=[dict(t) for t in db.execute(sql,params)]
             aggregate={}
             for strategy in ALL_STRATS:
@@ -420,6 +436,6 @@ def summary(market=None):
                     'pnl':round(sum(t['pnl'] or 0 for t in closed),2)
                 }
             last={r['market']:r['last_bar'] for r in db.execute('SELECT market,last_bar FROM progress').fetchall()}
-            events=[dict(r) for r in db.execute('SELECT * FROM signal_log WHERE signal_time>=? ORDER BY signal_time DESC LIMIT 1000',(started,)).fetchall()]
+            events=[dict(r) for r in db.execute('SELECT * FROM signal_log WHERE signal_time>=? ORDER BY signal_time DESC',(started,)).fetchall()]
             return {'events':events,'trades':trades,'summary':aggregate,'last_processed':last,'risk_usd':RISK,
                     'paper_only':True,'experiment':TEST_VERSION,'experiment_started_at':started,'persistence':'PostgreSQL' if DATABASE_URL else DB,'markets':list(MARKETS)}
