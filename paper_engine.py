@@ -403,7 +403,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
         with conn() as db:
             row=db.execute('SELECT last_bar FROM progress WHERE market=?',(key,)).fetchone()
             if row is None:
-                _save_market_candles(db,'lab',TEST_VERSION,market,suffix,bars)
+                _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ('1m','extremes') else '5m',bars)
                 db.execute('INSERT INTO progress VALUES (?,?)',(key,last))
                 return {'processed':0,'reason':'first observation; no historical paper fills'}
             last_seen=int(row['last_bar'])
