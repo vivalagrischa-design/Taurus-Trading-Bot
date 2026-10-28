@@ -361,7 +361,7 @@ def _trade_context(bars,stamp,timeframe='5m'):
     minute=local.hour*60+local.minute
     session='premarket' if minute<570 else 'regular' if minute<960 else 'after_hours'
     stored=tail[-25:]
-    return {'phase':phase,'timeframe':timeframe,'strategy_source_hash':STRATEGY_SOURCE_HASH,'return_15m':r15,'return_60m':r60,'return_240m':r240,
+    return {'phase':phase,'timeframe':timeframe,'data_source':'Yahoo Finance delayed futures proxy','strategy_source_hash':STRATEGY_SOURCE_HASH,'return_15m':r15,'return_60m':r60,'return_240m':r240,
             'range_60m_pct':range_60m,'efficiency_ratio_60m':efficiency,'ny_session':session,
             'ny_hour':local.hour,'weekday':local.weekday(),'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},
             'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in stored]}
