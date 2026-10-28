@@ -6,7 +6,7 @@ following bar open. Intrabar SL wins ties. A single process is required.
 import math,threading,time,json
 from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
-from paper_engine import conn,FUTURES,FUTURES_TICK,FUTURES_SLIP_TICKS,_trade_context
+from paper_engine import conn,FUTURES,FUTURES_TICK,FUTURES_SLIP_TICKS,_trade_context,_record_scans
 from strategies import evaluate
 
 LOCK=threading.RLock()
@@ -154,7 +154,9 @@ def advance(market,bars,interval='5m'):
                             ident=f"{VERSION}:{market}:{tile['id']}:{int(bar['time'])}:{side}"
                             db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty,timeframe,signal_context,strategy_version)
                                VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,?) ON CONFLICT(id) DO NOTHING""",
-                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-(60 if interval=='1m' else 12)):i+1],int(bar['time']),interval),separators=(',',':')),str(sig.get('version','unknown'))))
+                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-(240 if interval=='1m' else 48)):i+1],int(bar['time']),interval),separators=(',',':')),str(sig.get('version','unknown'))))
+                    scan_allowed=tuple(x for x in SELECTED if not (interval=='5m' and x=='bb_only_short')) if interval=='5m' else ('bb_only_short',)
+                    _record_scans(db,'lucid',VERSION,market,tiles,bar,interval,bars[:i+1],scan_allowed)
                 db.execute('UPDATE lucid_account SET '+col+'=? WHERE version=?',(int(bar['time']),VERSION))
                 a=db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone()
                 processed+=1
