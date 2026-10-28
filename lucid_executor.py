@@ -51,7 +51,7 @@ def setup(db):
             db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS '+col+' TEXT')
         elif col not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
             db.execute('ALTER TABLE lucid_orders ADD COLUMN '+col+' TEXT')
-    numeric_cols={'entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION','risk_plan':'DOUBLE PRECISION','mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION','trail_updates':'INTEGER'}
+    numeric_cols={'exit_price':'DOUBLE PRECISION','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION','risk_plan':'DOUBLE PRECISION','mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION','trail_updates':'INTEGER'}
     for col,typ in numeric_cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS '+col+' '+typ)
