@@ -84,7 +84,12 @@ def init_extra(db):
         else:
             known={r['name'] for r in db.execute('PRAGMA table_info(trades)').fetchall()}
             if name not in known:db.execute('ALTER TABLE trades ADD COLUMN '+name+' '+sqltype)
-    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT)''')
+    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT,context TEXT,strategy_version TEXT)''')
+    for name,sqltype in {'context':'TEXT','strategy_version':'TEXT'}.items():
+        if isinstance(db,PgConnection):db.execute('ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
+        else:
+            known={r['name'] for r in db.execute('PRAGMA table_info(signal_log)').fetchall()}
+            if name not in known:db.execute('ALTER TABLE signal_log ADD COLUMN '+name+' '+sqltype)
     db.execute('CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy,market,signal_time)')
     # Preserve previous test history; initialize this experiment only once.
     db.execute('CREATE TABLE IF NOT EXISTS paper_experiments(version TEXT PRIMARY KEY, started_at BIGINT NOT NULL)')
@@ -98,9 +103,9 @@ def init_extra(db):
 
 
 
-def record_signal(db,trade_id,market,strategy,sig,decision,reason):
-    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
-      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason))
+def record_signal(db,trade_id,market,strategy,sig,decision,reason,context=None):
+    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version','unknown'))))
 
 
 def _slipped(price,side,is_entry,market=None):
@@ -363,13 +368,13 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
                     quality=score_signal(sig,bars[:i+1])
                     score_note='QUALITY_'+str(quality['score'])+'_'+quality['grade']
+                    context_bars=bars[max(0,i-(60 if suffix in ('1m','extremes') else 12)):i+1]
+                    signal_context=_trade_context(context_bars,int(sig['time']),'1m' if suffix in ('1m','extremes') else '5m')
                     exists=db.execute("SELECT 1 FROM trades WHERE market=? AND strategy=? AND status IN ('PENDING','OPEN')",(market,strategy)).fetchone()
                     if exists:
-                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note)
+                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note,signal_context)
                         continue
-                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note)
-                    context_bars=bars[max(0,i-24):i+1]
-                    signal_context=_trade_context(context_bars,int(sig['time']),'1m' if suffix in ('1m','extremes') else '5m')
+                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note,signal_context)
                     db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version)
                                   VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?)''',
                                (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version','unknown'))))
