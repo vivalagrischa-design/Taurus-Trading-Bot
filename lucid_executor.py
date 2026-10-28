@@ -190,7 +190,7 @@ def analytics():
             return {'name':'TAURUS Lucid 25K','mode':'INDEPENDENT_PAPER','version':VERSION,
                     'starting_balance':START,'balance':round(float(account['balance']),2),
                     'realized_pnl':round(float(account['balance'])-START,2),'locked':bool(account['locked']),
-                    'selected_strategies':list(SELECTED),'trades':rows,'closed_trades':sum(x['status']=='CLOSED' for x in rows),
+                    'selected_strategies':list(SELECTED),'trades':rows,'persistence':'PostgreSQL' if os.environ.get('DATABASE_URL') else 'SQLite (lokal, nicht dauerhaft)','closed_trades':sum(x['status']=='CLOSED' for x in rows),
                     'open_trades':sum(x['status']=='OPEN' for x in rows),'source':'full Lucid paper ledger'}
 
 def status():
