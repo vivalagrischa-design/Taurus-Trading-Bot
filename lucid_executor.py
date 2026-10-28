@@ -67,7 +67,7 @@ def _session(db,acct,stamp):
         db.execute('UPDATE lucid_account SET session_day=?,session_start=balance,peak=?,floor=?,locked=? WHERE version=?',
                    (day,peak,floor,locked,VERSION))
 
-def _close(db,trade,bar,history=None):
+def _close(db,trade,bar,history=None,timeframe='5m'):
     market=trade['market'];side=trade['side'];stop=float(trade['stop']);tp=float(trade['tp'])
     hit_sl=float(bar['low'])<=stop if side=='LONG' else float(bar['high'])>=stop
     hit_tp=float(bar['high'])>=tp if side=='LONG' else float(bar['low'])<=tp
@@ -85,7 +85,7 @@ def _close(db,trade,bar,history=None):
     px=_slip(raw,side,False,market)
     mult,fee=FUTURES[market]
     pnl=round((px-float(trade['entry']))*(1 if side=='LONG' else -1)*mult*int(trade['qty'])-fee*int(trade['qty']),4)
-    exit_context=json.dumps(_trade_context(history or [bar],int(bar['time'])),separators=(',',':'))
+    exit_context=json.dumps(_trade_context(history or [bar],int(bar['time']),timeframe),separators=(',',':'))
     db.execute("UPDATE lucid_orders SET status='CLOSED',exit_time=?,pnl=?,exit_reason=?,exit_context=? WHERE id=?",
                (bar['time'],pnl,'SL' if hit_sl else 'TP',exit_context,trade['id']))
     db.execute('UPDATE lucid_account SET balance=balance+? WHERE version=?',(pnl,VERSION))
@@ -93,7 +93,7 @@ def _close(db,trade,bar,history=None):
     if float(a['balance'])<=float(a['floor']) or float(a['session_start'])-float(a['balance'])>=DAY_STOP:
         db.execute('UPDATE lucid_account SET locked=1 WHERE version=?',(VERSION,))
 
-def _open(db,trade,bar,history=None):
+def _open(db,trade,bar,history=None,timeframe='5m'):
     market=trade['market'];side=trade['side'];entry=_slip(bar['open'],side,True,market)
     stop=float(trade['stop']);tp=float(trade['tp'])
     if (side=='LONG' and (stop>=entry or tp<=entry)) or (side=='SHORT' and (stop<=entry or tp>=entry)):
@@ -113,7 +113,7 @@ def _open(db,trade,bar,history=None):
     qty=min(available,int(maxrisk//risk_unit)) if risk_unit>0 else 0
     if qty<=0:
         db.execute("UPDATE lucid_orders SET status='CANCELLED',exit_reason='CAPACITY_OR_RISK' WHERE id=?",(trade['id'],));return
-    entry_context=json.dumps(_trade_context(history or [],int(bar['time'])),separators=(',',':'))
+    entry_context=json.dumps(_trade_context(history or [],int(bar['time']),timeframe),separators=(',',':'))
     db.execute("UPDATE lucid_orders SET status='OPEN',entry_time=?,entry=?,qty=?,initial_stop=?,entry_context=? WHERE id=?",(bar['time'],entry,qty,stop,entry_context,trade['id']))
 
 def advance(market,bars,interval='5m'):
@@ -133,9 +133,9 @@ def advance(market,bars,interval='5m'):
                 if int(bar['time'])<=last:continue
                 _session(db,a,int(bar['time']))
                 pending=db.execute("SELECT * FROM lucid_orders WHERE market=? AND timeframe=? AND status='PENDING' AND signal_time<? ORDER BY signal_time",(market,interval,bar['time'])).fetchall()
-                for trade in pending:_open(db,trade,bar,bars[:i])
+                for trade in pending:_open(db,trade,bar,bars[:i],interval)
                 active=db.execute("SELECT * FROM lucid_orders WHERE market=? AND timeframe=? AND status='OPEN' AND entry_time<=?",(market,interval,bar['time'])).fetchall()
-                for trade in active:_close(db,trade,bar,bars[:i+1])
+                for trade in active:_close(db,trade,bar,bars[:i+1],interval)
                 # Only signals generated from data available at this completed bar.
                 if i>=(75 if interval=='5m' else 320):
                     if interval=='5m':
@@ -154,7 +154,7 @@ def advance(market,bars,interval='5m'):
                             ident=f"{VERSION}:{market}:{tile['id']}:{int(bar['time'])}:{side}"
                             db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty,timeframe,signal_context,strategy_version)
                                VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,?) ON CONFLICT(id) DO NOTHING""",
-                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-24):i+1],int(bar['time'])),separators=(',',':')),str(sig.get('version','unknown'))))
+                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-(60 if interval=='1m' else 12)):i+1],int(bar['time']),interval),separators=(',',':')),str(sig.get('version','unknown'))))
                 db.execute('UPDATE lucid_account SET '+col+'=? WHERE version=?',(int(bar['time']),VERSION))
                 a=db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone()
                 processed+=1
