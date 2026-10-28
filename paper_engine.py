@@ -88,15 +88,15 @@ def init_extra(db):
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
           'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
-          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','signal_context':'TEXT','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION'}
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','signal_context':'TEXT','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
         else:
             known={r['name'] for r in db.execute('PRAGMA table_info(trades)').fetchall()}
             if name not in known:db.execute('ALTER TABLE trades ADD COLUMN '+name+' '+sqltype)
-    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT,context TEXT,strategy_version TEXT)''')
-    for name,sqltype in {'context':'TEXT','strategy_version':'TEXT'}.items():
+    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT,signal_reason TEXT,context TEXT,strategy_version TEXT)''')
+    for name,sqltype in {'context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT'}.items():
         if isinstance(db,PgConnection):db.execute('ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
         else:
             known={r['name'] for r in db.execute('PRAGMA table_info(signal_log)').fetchall()}
@@ -117,8 +117,8 @@ def init_extra(db):
 
 
 def record_signal(db,trade_id,market,strategy,sig,decision,reason,context=None):
-    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
-      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH)))
+    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,signal_reason,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,str(sig.get('reason','')),json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH),str(sig.get('reason',''))))
 
 
 def _slipped(price,side,is_entry,market=None):
@@ -427,8 +427,8 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                         record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note,signal_context)
                         continue
                     record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note,signal_context)
-                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version)
-                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?)''',
+                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version,signal_reason)
+                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?,?)''',
                                (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version','unknown'))))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key))
                 count+=1
