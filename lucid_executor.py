@@ -6,7 +6,7 @@ following bar open. Intrabar SL wins ties. A single process is required.
 import math,threading,time,json
 from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
-from paper_engine import conn,FUTURES,FUTURES_TICK,FUTURES_SLIP_TICKS,_trade_context,_record_scans,STRATEGY_SOURCE_HASH
+from paper_engine import conn,FUTURES,FUTURES_TICK,FUTURES_SLIP_TICKS,_trade_context,_record_scans,_save_market_candles,STRATEGY_SOURCE_HASH
 from strategies import evaluate
 
 LOCK=threading.RLock()
@@ -144,9 +144,11 @@ def advance(market,bars,interval='5m'):
             setup(db)
             a=db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone()
             if a[col] is None:
+                _save_market_candles(db,'lucid',VERSION,market,interval,bars)
                 db.execute('UPDATE lucid_account SET '+col+'=? WHERE version=?',(int(bars[-1]['time']),VERSION))
                 return {'processed':0,'reason':'first observation; no historical fills'}
             last=int(a[col]); processed=0
+            _save_market_candles(db,'lucid',VERSION,market,interval,[bar for bar in bars if int(bar['time'])>last])
             for i,bar in enumerate(bars):
                 if int(bar['time'])<=last:continue
                 _session(db,a,int(bar['time']))
