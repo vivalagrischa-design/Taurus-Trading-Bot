@@ -73,7 +73,7 @@ async function load(){const system=$('system').value;$('status').textContent='La
  card.querySelectorAll('canvas').forEach(cv=>{cv._trades=ts});
  }
  const obs=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){const cv=e.target;draw(cv,cv.dataset.kind,cv._trades||[]);obs.unobserve(cv)}}),{rootMargin:'200px'});document.querySelectorAll('canvas.lazy').forEach(c=>obs.observe(c));
- $('status').textContent=' · '+closed.length+' geschlossene Trades · '+names.length+' Strategien · Scanbars '+scans.bars_scanned+' · Stand '+new Date().toLocaleTimeString('de-CH');
+ const history=(scans.market_history||[]).map(x=>x.market.toUpperCase()+' '+x.timeframe+': '+x.bars+' Kerzen').join(' · ')||'keine Kerzenhistorie';$('status').textContent=' · '+closed.length+' geschlossene Trades · '+names.length+' Strategien · Scanbars '+scans.bars_scanned+' · '+history+' · Stand '+new Date().toLocaleTimeString('de-CH');
 }
 $('reload').onclick=()=>load().catch(e=>$('status').textContent='Ladefehler: '+e.message);$('system').onchange=()=>load().catch(e=>$('status').textContent='Ladefehler: '+e.message);
 load().catch(e=>$('status').textContent='Ladefehler: '+e.message);
