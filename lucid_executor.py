@@ -29,7 +29,7 @@ def setup(db):
        id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,
        signal_time BIGINT,entry_time BIGINT,exit_time BIGINT,
        entry DOUBLE PRECISION,stop DOUBLE PRECISION,initial_stop DOUBLE PRECISION,tp DOUBLE PRECISION,
-       qty INTEGER,status TEXT,pnl DOUBLE PRECISION,exit_reason TEXT,
+       qty INTEGER,status TEXT,pnl DOUBLE PRECISION,exit_reason TEXT,exit_price DOUBLE PRECISION,
         timeframe TEXT NOT NULL DEFAULT '5m',signal_context TEXT,entry_context TEXT,exit_context TEXT,strategy_version TEXT)""")
     # Additive migrations for existing Lucid accounts and paper orders.
     from paper_engine import PgConnection
@@ -51,6 +51,12 @@ def setup(db):
             db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS '+col+' TEXT')
         elif col not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
             db.execute('ALTER TABLE lucid_orders ADD COLUMN '+col+' TEXT')
+    numeric_cols={'entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION','risk_plan':'DOUBLE PRECISION','mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION','trail_updates':'INTEGER'}
+    for col,typ in numeric_cols.items():
+        if isinstance(db,PgConnection):
+            db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS '+col+' '+typ)
+        elif col not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
+            db.execute('ALTER TABLE lucid_orders ADD COLUMN '+col+' '+typ)
     db.execute("""INSERT INTO lucid_account(version,balance,peak,floor,session_start,locked)
        VALUES(?,?,?,?,?,0) ON CONFLICT(version) DO NOTHING""",(VERSION,START,START,START-1000,START))
 
@@ -69,6 +75,12 @@ def _session(db,acct,stamp):
 
 def _close(db,trade,bar,history=None,timeframe='5m'):
     market=trade['market'];side=trade['side'];stop=float(trade['stop']);tp=float(trade['tp'])
+    mult=FUTURES[market][0];qty=int(trade['qty'])
+    favorable=max(0.0,(float(bar['high'])-float(trade['entry'])) if side=='LONG' else (float(trade['entry'])-float(bar['low'])))
+    adverse=max(0.0,(float(trade['entry'])-float(bar['low'])) if side=='LONG' else (float(bar['high'])-float(trade['entry'])))
+    mfe=max(float(trade['mfe_usd'] or 0),favorable*mult*qty)
+    mae=min(float(trade['mae_usd'] or 0),-adverse*mult*qty)
+    db.execute('UPDATE lucid_orders SET mfe_usd=?,mae_usd=? WHERE id=?',(mfe,mae,trade['id']))
     hit_sl=float(bar['low'])<=stop if side=='LONG' else float(bar['high'])>=stop
     hit_tp=float(bar['high'])>=tp if side=='LONG' else float(bar['low'])<=tp
     if not (hit_sl or hit_tp):
@@ -79,15 +91,16 @@ def _close(db,trade,bar,history=None,timeframe='5m'):
         if trade['strategy']!='rev_bounce' and initial_r>0 and favorable>=initial_r:
             candidate=float(bar['close'])-(1 if side=='LONG' else -1)*initial_r
             stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
-            db.execute('UPDATE lucid_orders SET stop=? WHERE id=?',(stop,trade['id']))
+            db.execute('UPDATE lucid_orders SET stop=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(stop,trade['id']))
         return
     raw=(min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))) if hit_sl else tp
     px=_slip(raw,side,False,market)
     mult,fee=FUTURES[market]
-    pnl=round((px-float(trade['entry']))*(1 if side=='LONG' else -1)*mult*int(trade['qty'])-fee*int(trade['qty']),4)
+    gross=(px-float(trade['entry']))*(1 if side=='LONG' else -1)*mult*int(trade['qty'])
+    fees=fee*int(trade['qty']);pnl=round(gross-fees,4)
     exit_context=json.dumps(_trade_context(history or [bar],int(bar['time']),timeframe),separators=(',',':'))
-    db.execute("UPDATE lucid_orders SET status='CLOSED',exit_time=?,pnl=?,exit_reason=?,exit_context=? WHERE id=?",
-               (bar['time'],pnl,'SL' if hit_sl else 'TP',exit_context,trade['id']))
+    db.execute("UPDATE lucid_orders SET status='CLOSED',exit_time=?,exit_price=?,pnl=?,exit_reason=?,exit_context=?,exit_reference=?,exit_slippage_usd=?,gross_pnl=?,fees_paid=? WHERE id=?",
+               (bar['time'],px,pnl,'SL' if hit_sl else 'TP',exit_context,raw,abs(px-raw)*int(trade['qty'])*mult,gross,fees,trade['id']))
     db.execute('UPDATE lucid_account SET balance=balance+? WHERE version=?',(pnl,VERSION))
     a=db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone()
     if float(a['balance'])<=float(a['floor']) or float(a['session_start'])-float(a['balance'])>=DAY_STOP:
@@ -114,7 +127,9 @@ def _open(db,trade,bar,history=None,timeframe='5m'):
     if qty<=0:
         db.execute("UPDATE lucid_orders SET status='CANCELLED',exit_reason='CAPACITY_OR_RISK' WHERE id=?",(trade['id'],));return
     entry_context=json.dumps(_trade_context(history or [],int(bar['time']),timeframe),separators=(',',':'))
-    db.execute("UPDATE lucid_orders SET status='OPEN',entry_time=?,entry=?,qty=?,initial_stop=?,entry_context=? WHERE id=?",(bar['time'],entry,qty,stop,entry_context,trade['id']))
+    entry_slippage=abs(entry-float(bar['open']))*qty*mult
+    risk_plan=abs(entry-stop)*mult*qty
+    db.execute("UPDATE lucid_orders SET status='OPEN',entry_time=?,entry=?,qty=?,initial_stop=?,entry_context=?,entry_reference=?,entry_slippage_usd=?,risk_plan=?,mfe_usd=0,mae_usd=0,trail_updates=0 WHERE id=?",(bar['time'],entry,qty,stop,entry_context,float(bar['open']),entry_slippage,risk_plan,trade['id']))
 
 def advance(market,bars,interval='5m'):
     if market not in FUTURES or not bars or interval not in ('5m','1m'):
