@@ -164,6 +164,21 @@ def paper(market: str = 'all'):
     result['delayed_nq']=(market=='nq' or market=='all')
     return result
 
+
+@app.get('/api/strategy-scans')
+def strategy_scans(system: str = 'lab', market: str = 'all'):
+    if system not in ('lab','lucid'):
+        raise HTTPException(400,detail='system must be lab or lucid')
+    if market!='all' and market not in FUTURES:
+        raise HTTPException(400,detail='Unbekannter Markt')
+    from paper_engine import scan_summary
+    try:
+        return scan_summary(system,None if market=='all' else market)
+    except Exception as exc:
+        logging.exception('Strategy scan summary failed')
+        raise HTTPException(503,'Strategie-Scan-Auswertung nicht verfügbar') from exc
+
+
 @app.get('/api/lucid')
 def lucid_status():
     from lucid_executor import status
