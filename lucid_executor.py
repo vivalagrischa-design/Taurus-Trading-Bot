@@ -67,7 +67,8 @@ def _close(db,trade,bar):
     hit_sl=float(bar['low'])<=stop if side=='LONG' else float(bar['high'])>=stop
     hit_tp=float(bar['high'])>=tp if side=='LONG' else float(bar['low'])<=tp
     if not (hit_sl or hit_tp):
-        initial_stop=float(trade.get('initial_stop') or stop)
+        initial_value=trade['initial_stop']
+        initial_stop=float(initial_value if initial_value is not None else stop)
         initial_r=abs(float(trade['entry'])-initial_stop)
         favorable=(float(bar['close'])-float(trade['entry']))*(1 if side=='LONG' else -1)
         if trade['strategy']!='rev_bounce' and initial_r>0 and favorable>=initial_r:
