@@ -482,12 +482,13 @@ def scan_summary(system='lab',market=None,run_id=None):
     for row in rows:
         r=dict(row);key=(r['strategy'],r['market'],r['timeframe'])
         item=grouped.setdefault(key,{'strategy':r['strategy'],'market':r['market'],'timeframe':r['timeframe'],
-            'bars_scanned':0,'signal_bars':0,'phases':{},'checks':{},'latest':None})
+            'bars_scanned':0,'signal_bars':0,'phases':{},'phase_signals':{},'checks':{},'latest':None})
         item['bars_scanned']+=1;item['signal_bars']+=int(r['current_signals'] or 0)
         try:context=json.loads(r['context'] or '{}')
         except Exception:context={}
         phase=context.get('phase','unknown')
         item['phases'][phase]=item['phases'].get(phase,0)+1
+        item['phase_signals'][phase]=item['phase_signals'].get(phase,0)+int(r['current_signals'] or 0)
         try:checks=json.loads(r['checks'] or '[]')
         except Exception:checks=[]
         for label,state in checks:
