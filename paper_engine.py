@@ -236,7 +236,7 @@ def _open_pending(db,market,bar,history,suffix):
         db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=?,entry_context=? WHERE id=?",
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
                     _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
-                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time'])),separators=(',',':')),t['id']))
+                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time']),'1m' if suffix=='1m' else '5m'),separators=(',',':')),t['id']))
 
 
 def _net_break_even_stop(entry,side,market):
@@ -309,7 +309,7 @@ def _close_open(db,market,bar,suffix,history=None):
         gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*multiplier
         fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
         pnl=gross-fees
-        exit_context=_trade_context(history or [bar],int(bar['time']))
+        exit_context=_trade_context(history or [bar],int(bar['time']),'1m' if suffix=='1m' else '5m')
         db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=?,exit_context=? WHERE id=?",
                    (bar['time'],exit_price,round(pnl,4),reason,json.dumps(exit_context,separators=(',',':')),t['id']))
 
@@ -323,10 +323,10 @@ def _trade_context(bars,stamp):
     tail=prior[-25:]
     if not tail:return {'phase':'unknown','reason':'no_prior_candles','candles':[]}
     closes=[float(b['close']) for b in tail]
-    change=(closes[-1]-closes[max(0,len(closes)-13)])/closes[max(0,len(closes)-13)] if len(closes)>=13 else None
+    change=(closes[-1]-closes[-1-horizon])/closes[-1-horizon] if len(closes)>horizon and closes[-1-horizon] else None
     phase=('up' if change is not None and change>0.001 else 'down' if change is not None and change<-.001 else 'sideways' if change is not None else 'unknown')
     last=tail[-1]; rng=max(float(last['high'])-float(last['low']),1e-12); body=abs(float(last['close'])-float(last['open']))
-    return {'phase':phase,'return_60m':change,'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in tail]}
+    return {'phase':phase,'timeframe':timeframe,'return_60m':change,'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in tail]}
 
 
 def _advance_generic(market,bars,signal_lookup,suffix='5m'):
@@ -367,7 +367,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                         continue
                     record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note)
                     context_bars=bars[max(0,i-24):i+1]
-                    signal_context=_trade_context(context_bars,int(sig['time']))
+                    signal_context=_trade_context(context_bars,int(sig['time']),'1m' if suffix in ('1m','extremes') else '5m')
                     db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version)
                                   VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?)''',
                                (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version','unknown'))))
