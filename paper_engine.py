@@ -356,10 +356,10 @@ def _trade_context(bars,stamp,timeframe='5m'):
             'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in stored]}
 
 
-def _record_scans(db,system,run_id,market,tiles,bar,timeframe,bars):
+def _record_scans(db,system,run_id,market,tiles,bar,timeframe,bars,allowed_strategies=None):
     stamp=int(bar['time'])
     context=json.dumps(_trade_context(bars,stamp,timeframe),separators=(',',':'))
-    allowed=set(_engine_strategies('extremes' if timeframe=='1m' else timeframe))
+    allowed=set(allowed_strategies) if allowed_strategies is not None else set(_engine_strategies(timeframe))
     for tile in tiles or []:
         strategy=tile.get('id')
         if strategy not in allowed:continue
@@ -401,7 +401,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                 scan_result=signal_lookup(i)
                 if isinstance(scan_result,tuple):signals,tiles=scan_result
                 else:signals,tiles=scan_result,None
-                _record_scans(db,'lab',TEST_VERSION,market,tiles,b,'1m' if suffix in ('1m','extremes') else '5m',bars[:i+1])
+                _record_scans(db,'lab',TEST_VERSION,market,tiles,b,'1m' if suffix in ('1m','extremes') else '5m',bars[:i+1],_engine_strategies(suffix))
                 for strategy,sig in signals:
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
