@@ -369,7 +369,9 @@ def _trade_context(bars,stamp,timeframe='5m'):
 
 def _record_scans(db,system,run_id,market,tiles,bar,timeframe,bars,allowed_strategies=None):
     stamp=int(bar['time'])
-    context=json.dumps(_trade_context(bars,stamp,timeframe),separators=(',',':'))
+    snapshot=_trade_context(bars,stamp,timeframe)
+    snapshot.pop('candles',None)
+    context=json.dumps(snapshot,separators=(',',':'))
     allowed=set(allowed_strategies) if allowed_strategies is not None else set(_engine_strategies(timeframe))
     for tile in tiles or []:
         strategy=tile.get('id')
