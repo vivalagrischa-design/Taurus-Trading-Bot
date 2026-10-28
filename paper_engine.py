@@ -95,8 +95,8 @@ def init_extra(db):
         else:
             known={r['name'] for r in db.execute('PRAGMA table_info(trades)').fetchall()}
             if name not in known:db.execute('ALTER TABLE trades ADD COLUMN '+name+' '+sqltype)
-    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT,signal_reason TEXT,context TEXT,strategy_version TEXT)''')
-    for name,sqltype in {'context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT'}.items():
+    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT,signal_reason TEXT,signal_entry DOUBLE PRECISION,signal_stop DOUBLE PRECISION,signal_tp DOUBLE PRECISION,context TEXT,strategy_version TEXT)''')
+    for name,sqltype in {'context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT','signal_entry':'DOUBLE PRECISION','signal_stop':'DOUBLE PRECISION','signal_tp':'DOUBLE PRECISION'}.items():
         if isinstance(db,PgConnection):db.execute('ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
         else:
             known={r['name'] for r in db.execute('PRAGMA table_info(signal_log)').fetchall()}
@@ -104,6 +104,8 @@ def init_extra(db):
     db.execute('CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy,market,signal_time)')
     db.execute('''CREATE TABLE IF NOT EXISTS strategy_scans(system TEXT,run_id TEXT,market TEXT,strategy TEXT,timeframe TEXT,bar_time BIGINT,state TEXT,details TEXT,checks TEXT,current_signals INTEGER,context TEXT,PRIMARY KEY(system,run_id,market,strategy,timeframe,bar_time))''')
     db.execute('CREATE INDEX IF NOT EXISTS idx_strategy_scans_lookup ON strategy_scans(system,market,strategy,bar_time)')
+    db.execute('''CREATE TABLE IF NOT EXISTS market_candles(system TEXT,run_id TEXT,market TEXT,timeframe TEXT,bar_time BIGINT,open DOUBLE PRECISION,high DOUBLE PRECISION,low DOUBLE PRECISION,close DOUBLE PRECISION,volume DOUBLE PRECISION,source TEXT,PRIMARY KEY(system,run_id,market,timeframe,bar_time))''')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_market_candles_time ON market_candles(system,market,timeframe,bar_time)')
     # Preserve previous test history; initialize this experiment only once.
     db.execute('CREATE TABLE IF NOT EXISTS paper_experiments(version TEXT PRIMARY KEY, started_at BIGINT NOT NULL)')
     existing=db.execute('SELECT started_at FROM paper_experiments WHERE version=?',(TEST_VERSION,)).fetchone()
@@ -117,8 +119,8 @@ def init_extra(db):
 
 
 def record_signal(db,trade_id,market,strategy,sig,decision,reason,context=None):
-    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,signal_reason,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
-      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,str(sig.get('reason','')),json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH)))
+    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,signal_reason,signal_entry,signal_stop,signal_tp,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,str(sig.get('reason','')),float(sig.get('entry') or 0),float(sig.get('stop') or 0),float(sig.get('tp') or 0),json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH)))
 
 
 def _slipped(price,side,is_entry,market=None):
@@ -367,6 +369,14 @@ def _trade_context(bars,stamp,timeframe='5m'):
             'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in stored]}
 
 
+
+def _save_market_candles(db,system,run_id,market,timeframe,bars):
+    for b in bars or []:
+        db.execute('''INSERT INTO market_candles(system,run_id,market,timeframe,bar_time,open,high,low,close,volume,source)
+                      VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(system,run_id,market,timeframe,bar_time) DO NOTHING''',
+                   (system,run_id,market,timeframe,int(b['time']),float(b['open']),float(b['high']),float(b['low']),float(b['close']),float(b.get('volume',0) or 0),'Yahoo Finance delayed futures proxy'))
+
+
 def _record_scans(db,system,run_id,market,tiles,bar,timeframe,bars,allowed_strategies=None):
     stamp=int(bar['time'])
     snapshot=_trade_context(bars,stamp,timeframe)
@@ -393,12 +403,14 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
         with conn() as db:
             row=db.execute('SELECT last_bar FROM progress WHERE market=?',(key,)).fetchone()
             if row is None:
+                _save_market_candles(db,'lab',TEST_VERSION,market,suffix,bars)
                 db.execute('INSERT INTO progress VALUES (?,?)',(key,last))
                 return {'processed':0,'reason':'first observation; no historical paper fills'}
             last_seen=int(row['last_bar'])
             if last<last_seen: return {'processed':0,'reason':'data older than watermark'}
             pending=[(i,b) for i,b in enumerate(bars) if b['time']>last_seen]
             if not pending: return {'processed':0,'reason':'no new complete candle'}
+            _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ('1m','extremes') else '5m',[b for _,b in pending])
             if pending[0][1]['time']>last_seen+step:
                 db.execute("UPDATE trades SET status='UNKNOWN',exit_reason='DATA_GAP' WHERE market=? AND strategy IN ("+','.join('?' for _ in _engine_strategies(suffix))+") AND status IN ('OPEN','PENDING')",(market,*_engine_strategies(suffix)))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(last,key))
