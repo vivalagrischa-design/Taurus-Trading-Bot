@@ -19,7 +19,7 @@ jobs:
         run: |
           python -m unittest -v test_lucid_25k_sim test_v7_session_policy
           python -m unittest discover -s tests -p 'test_*.py' -v
-          python -m unittest -v test_lab_lucid_separation test_audit_engulfing_regime test_omar_v2 test_rosi_strategy test_lucid_1m_winners
+          python -m unittest -v test_lab_lucid_separation test_audit_engulfing_regime test_omar_v2 test_rosi_strategy test_lucid_1m_winners test_daily_archive
 
       - name: Snapshot current live LAB and Lucid before any deploy
         run: |
@@ -37,6 +37,6 @@ jobs:
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: taurus-live-before-rosi-lab-lucid-winners
+          name: taurus-live-before-context-logging-and-daily-archive
           path: taurus-live-backup/
           retention-days: 30
