@@ -6,7 +6,7 @@
 a{color:#cbbaff}h1{font-size:clamp(26px,4vw,38px);margin:20px 0 8px}.muted{color:#aab8ca}
 .controls,.note,.strategy{background:#142133;border:1px solid #334761;border-radius:16px;padding:18px;margin:14px 0}
 select,button{background:#1a293b;color:#fff;border:1px solid #536780;border-radius:9px;padding:11px;font-size:16px}
-.note{font-size:14px;color:#c2cede}.strategy h2{margin:0 0 6px;font-size:24px}.meta{color:#aab8ca;font-size:14px}
+.note{font-size:14px;color:#c2cede}.warning{background:#352a1a;border:1px solid #9b7435;color:#ffd88d;padding:12px 14px;border-radius:10px;margin:14px 0}.strategy h2{margin:0 0 6px;font-size:24px}.meta{color:#aab8ca;font-size:14px}
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}.metric{background:#1a2a3d;border-radius:10px;padding:10px}.metric span{display:block;color:#aab8ca;font-size:13px}.metric b{font-size:18px}
 .pos{color:#38d3a1}.neg{color:#ff7185}.chartbox{background:#101b2a;border-radius:12px;padding:12px;margin:12px 0}.chartbox h3{margin:0 0 3px;font-size:17px}.chartbox p{margin:0 0 8px;color:#aab8ca;font-size:13px}
 canvas{display:block;width:100%;height:255px}.equity{height:155px}
@@ -18,7 +18,7 @@ canvas{display:block;width:100%;height:255px}.equity{height:155px}
 <h1>Strategien: Marktphase, Entry und Ergebnis</h1>
 <p class="muted">Ein eigenes Auswertungsfeld pro Strategie. Jeder Punkt zeigt einen geschlossenen Trade: Marktbewegung vor dem tatsächlichen Entry gegen Netto-P/L. Darunter läuft das kumulierte Ergebnis in zeitlicher Reihenfolge.</p>
 <div class="note"><b>Phasenregel:</b> Aufwärts/Abwärts = Veränderung über 60 Minuten über +0,1 % bzw. unter −0,1 %, dazwischen Seitwärts. Signal, tatsächlicher Entry und Exit werden getrennt erfasst. Alte Trades ohne gespeicherten Kontext bleiben „nicht erfasst“; die Grafik berechnet dafür keine historischen Kerzen nachträglich aus heutigen Daten. Die 15-/60-/240-Minuten-Bewegung, Volatilität, Session und die letzten Kerzen werden je Ereignis mitgespeichert.</div>
-<div class="controls">Datenquelle <select id="system"><option value="lab">TAURUS Lab</option><option value="lucid">TAURUS Lucid</option></select> <button id="reload">Aktualisieren</button> <span id="status" class="muted"></span></div>
+<div id="persistence" class="warning" hidden></div><div class="controls">Datenquelle <select id="system"><option value="lab">TAURUS Lab</option><option value="lucid">TAURUS Lucid</option></select> <button id="reload">Aktualisieren</button> <span id="status" class="muted"></span></div>
 <div id="cards"></div>
 <script>
 const $=id=>document.getElementById(id), markets=['nq','mes','mgc'];
@@ -50,6 +50,7 @@ function draw(canvas,kind,trades){if(!canvas||!canvas.clientWidth)return;const d
 async function load(){const system=$('system').value;$('status').textContent='Lade Daten …';let d,scans;
  if(system==='lab'){[d,scans]=await Promise.all([fetch('/api/paper?market=all').then(r=>{if(!r.ok)throw Error('Lab-Daten nicht verfügbar');return r.json()}),fetch('/api/strategy-scans?system=lab').then(r=>{if(!r.ok)throw Error('Scan-Diagnose nicht verfügbar');return r.json()})])}
  else{[d,scans]=await Promise.all([fetch('/api/lucid/analytics').then(r=>{if(!r.ok)throw Error('Lucid-Daten nicht verfügbar');return r.json()}),fetch('/api/strategy-scans?system=lucid').then(r=>{if(!r.ok)throw Error('Scan-Diagnose nicht verfügbar');return r.json()})])}
+ const p=$('persistence');if(String(d.persistence||'').includes('PostgreSQL')){p.hidden=true;p.textContent=''}else{p.hidden=false;p.textContent='Achtung: Die Resultate liegen lokal in SQLite und können bei einem Neustart verloren gehen. Für einen verlässlichen Mehrtagesvergleich muss eine dauerhafte PostgreSQL-Datenbank verbunden sein.'}
  const trades=d.trades||[],closed=trades.filter(t=>t.status==='CLOSED'&&t.pnl!=null),agg=d.summary||{};
  let names=system==='lab'?Object.keys(agg):[...(d.selected_strategies||[])];names=[...new Set([...names,...trades.map(t=>t.strategy),...(scans.strategies||[]).map(x=>x.strategy)])].sort();
  const sc=Object.groupBy?Object.groupBy(scans.strategies||[],x=>x.strategy):(scans.strategies||[]).reduce((a,x)=>((a[x.strategy]??=[]).push(x),a),{});
