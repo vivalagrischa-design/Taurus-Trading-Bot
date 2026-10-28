@@ -236,7 +236,7 @@ def _open_pending(db,market,bar,history,suffix):
         db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=?,entry_context=? WHERE id=?",
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
                     _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
-                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time']),'1m' if suffix=='1m' else '5m'),separators=(',',':')),t['id']))
+                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time']),'1m' if suffix in ('1m','extremes') else '5m'),separators=(',',':')),t['id']))
 
 
 def _net_break_even_stop(entry,side,market):
