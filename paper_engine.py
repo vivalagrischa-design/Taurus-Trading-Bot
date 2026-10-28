@@ -2,7 +2,7 @@
 Signal bar close -> next bar OPEN. Stops take priority on ambiguous OHLC bars.
 State persisted in SQLite/PostgreSQL. Single process required.
 """
-import os,sqlite3,threading,math,time
+import os,sqlite3,threading,math,time,json
 from strategies import evaluate
 from setup_quality import score_signal
 
@@ -77,7 +77,7 @@ def init_extra(db):
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
           'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
-          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT'}
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','signal_context':'TEXT','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
@@ -233,10 +233,10 @@ def _open_pending(db,market,bar,history,suffix):
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
         bbpos,pct,rsi=_entry_indicators(history)
-        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=? WHERE id=?",
+        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=?,entry_context=? WHERE id=?",
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
                     _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
-                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,t['id']))
+                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time'])),separators=(',',':')),t['id']))
 
 
 def _net_break_even_stop(entry,side,market):
@@ -260,7 +260,7 @@ def _estimated_net_at_stop(trade,stop,market):
     return round(gross-fees,4)
 
 
-def _close_open(db,market,bar,suffix):
+def _close_open(db,market,bar,suffix,history=None):
     strategies=_engine_strategies(suffix)
     marks=','.join('?' for _ in strategies)
     rows=db.execute("SELECT * FROM trades WHERE market=? AND status='OPEN' AND entry_time<=? AND strategy IN ("+marks+")",
@@ -309,8 +309,9 @@ def _close_open(db,market,bar,suffix):
         gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*multiplier
         fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
         pnl=gross-fees
-        db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=? WHERE id=?",
-                   (bar['time'],exit_price,round(pnl,4),reason,t['id']))
+        exit_context=_trade_context(history or [bar],int(bar['time']))
+        db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=?,exit_context=? WHERE id=?",
+                   (bar['time'],exit_price,round(pnl,4),reason,json.dumps(exit_context,separators=(',',':')),t['id']))
 
 
 def _progress_key(market, suffix='5m'):
@@ -354,7 +355,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                     db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key)); continue
                 _add_scaled_legs(db,market,b,suffix)
                 _open_pending(db,market,b,bars[:i],suffix)
-                _close_open(db,market,b,suffix)
+                _close_open(db,market,b,suffix,bars[:i+1])
                 for strategy,sig in signal_lookup(i):
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
@@ -367,7 +368,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                     record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note)
                     context_bars=bars[max(0,i-24):i+1]
                     signal_context=_trade_context(context_bars,int(sig['time']))
-                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,entry_context,strategy_version)
+                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version)
                                   VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?)''',
                                (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version','unknown'))))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key))
