@@ -118,7 +118,7 @@ def init_extra(db):
 
 def record_signal(db,trade_id,market,strategy,sig,decision,reason,context=None):
     db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,signal_reason,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
-      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,str(sig.get('reason','')),json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH),str(sig.get('reason',''))))
+      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,str(sig.get('reason','')),json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH)))
 
 
 def _slipped(price,side,is_entry,market=None):
@@ -429,7 +429,7 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                     record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note,signal_context)
                     db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version,signal_reason)
                                   VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?,?)''',
-                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version','unknown'))))
+                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH),str(sig.get('reason',''))))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key))
                 count+=1
             return {'processed':count,'reason':'updated'}
