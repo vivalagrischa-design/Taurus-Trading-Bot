@@ -77,7 +77,7 @@ def init_extra(db):
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
           'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
-          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION'}
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
@@ -317,6 +317,17 @@ def _progress_key(market, suffix='5m'):
     return market if suffix=='5m' else f'{market}:{suffix}'
 
 
+def _trade_context(bars,stamp):
+    prior=[b for b in bars if int(b['time'])<=int(stamp)]
+    tail=prior[-25:]
+    if not tail:return {'phase':'unknown','reason':'no_prior_candles','candles':[]}
+    closes=[float(b['close']) for b in tail]
+    change=(closes[-1]-closes[max(0,len(closes)-13)])/closes[max(0,len(closes)-13)] if len(closes)>=13 else None
+    phase=('up' if change is not None and change>0.001 else 'down' if change is not None and change<-.001 else 'sideways' if change is not None else 'unknown')
+    last=tail[-1]; rng=max(float(last['high'])-float(last['low']),1e-12); body=abs(float(last['close'])-float(last['open']))
+    return {'phase':phase,'return_60m':change,'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in tail]}
+
+
 def _advance_generic(market,bars,signal_lookup,suffix='5m'):
     if market not in MARKETS or not bars:
         return {'processed':0,'reason':'unsupported/no data'}
@@ -354,9 +365,11 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                         record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note)
                         continue
                     record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note)
-                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe)
-                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?)''',
-                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m')))
+                    context_bars=bars[max(0,i-24):i+1]
+                    signal_context=_trade_context(context_bars,int(sig['time']))
+                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,entry_context,strategy_version)
+                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?)''',
+                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version','unknown'))))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key))
                 count+=1
             return {'processed':count,'reason':'updated'}
