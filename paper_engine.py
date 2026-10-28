@@ -2,7 +2,7 @@
 Signal bar close -> next bar OPEN. Stops take priority on ambiguous OHLC bars.
 State persisted in SQLite/PostgreSQL. Single process required.
 """
-import os,sqlite3,threading,math,time,json
+import os,sqlite3,threading,math,time,json,hashlib
 from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 from strategies import evaluate
@@ -23,6 +23,15 @@ ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
 TEST_VERSION='taurus_v7_zero_start_20261026'
+_RULE_FILES=('strategies.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','setup_quality.py','engine.py')
+def _ruleset_hash():
+    h=hashlib.sha256()
+    for name in _RULE_FILES:
+        path=os.path.join(os.path.dirname(__file__),name)
+        if os.path.isfile(path):
+            h.update(name.encode()+b'|');h.update(open(path,'rb').read())
+    return h.hexdigest()[:16]
+STRATEGY_SOURCE_HASH=_ruleset_hash()
 _LOCK=threading.RLock()
 
 
@@ -109,7 +118,7 @@ def init_extra(db):
 
 def record_signal(db,trade_id,market,strategy,sig,decision,reason,context=None):
     db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
-      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version','unknown'))))
+      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH)))
 
 
 def _slipped(price,side,is_entry,market=None):
@@ -350,7 +359,7 @@ def _trade_context(bars,stamp,timeframe='5m'):
     minute=local.hour*60+local.minute
     session='premarket' if minute<570 else 'regular' if minute<960 else 'after_hours'
     stored=tail[-25:]
-    return {'phase':phase,'timeframe':timeframe,'return_15m':r15,'return_60m':r60,'return_240m':r240,
+    return {'phase':phase,'timeframe':timeframe,'strategy_source_hash':STRATEGY_SOURCE_HASH,'return_15m':r15,'return_60m':r60,'return_240m':r240,
             'range_60m_pct':range_60m,'efficiency_ratio_60m':efficiency,'ny_session':session,
             'ny_hour':local.hour,'weekday':local.weekday(),'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},
             'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in stored]}
