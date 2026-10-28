@@ -162,6 +162,19 @@ def advance(market,bars,interval='5m'):
                 processed+=1
             return {'processed':processed}
 
+
+def analytics():
+    with LOCK:
+        with conn() as db:
+            setup(db)
+            account=dict(db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone())
+            rows=[dict(x) for x in db.execute('SELECT * FROM lucid_orders ORDER BY signal_time')]
+            return {'name':'TAURUS Lucid 25K','mode':'INDEPENDENT_PAPER','version':VERSION,
+                    'starting_balance':START,'balance':round(float(account['balance']),2),
+                    'realized_pnl':round(float(account['balance'])-START,2),'locked':bool(account['locked']),
+                    'selected_strategies':list(SELECTED),'trades':rows,'closed_trades':sum(x['status']=='CLOSED' for x in rows),
+                    'open_trades':sum(x['status']=='OPEN' for x in rows),'source':'full Lucid paper ledger'}
+
 def status():
     with LOCK:
         with conn() as db:
