@@ -32,6 +32,7 @@ jobs:
             echo 'Invalid YYYY-MM-DD date'; exit 1
           fi
           echo "DAY=$DAY" >> "$GITHUB_ENV"
+          export DAY
           curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 --max-time 180 \
             "https://taurus-trading-bot.onrender.com/api/archive/day?date=$DAY" \
             -o /tmp/taurus-day.json
