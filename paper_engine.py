@@ -318,10 +318,12 @@ def _progress_key(market, suffix='5m'):
     return market if suffix=='5m' else f'{market}:{suffix}'
 
 
-def _trade_context(bars,stamp):
+def _trade_context(bars,stamp,timeframe='5m'):
     prior=[b for b in bars if int(b['time'])<=int(stamp)]
-    tail=prior[-25:]
-    if not tail:return {'phase':'unknown','reason':'no_prior_candles','candles':[]}
+    minutes=1 if timeframe=='1m' else 5
+    horizon=max(1,60//minutes)
+    tail=prior[-max(25,horizon+1):]
+    if not tail:return {'phase':'unknown','reason':'no_prior_candles','timeframe':timeframe,'candles':[]}
     closes=[float(b['close']) for b in tail]
     change=(closes[-1]-closes[-1-horizon])/closes[-1-horizon] if len(closes)>horizon and closes[-1-horizon] else None
     phase=('up' if change is not None and change>0.001 else 'down' if change is not None and change<-.001 else 'sideways' if change is not None else 'unknown')
