@@ -180,7 +180,16 @@ def strategy_scans(system: str = 'lab', market: str = 'all'):
 
 
 @app.get('/api/archive/day')
-def archive_day(date: str = Query(..., pattern=r'^\\d{4}-\\d{2}-\\d{2}
+def archive_day(date: str):
+    """Daily read-only export used by the GitHub archival workflow."""
+    from daily_archive import daily_snapshot
+    try:
+        return daily_snapshot(date)
+    except ValueError as exc:
+        raise HTTPException(400,detail=str(exc)) from exc
+
+
+@app.get('/api/lucid')
 def lucid_status():
     from lucid_executor import status
     try:
