@@ -27,7 +27,7 @@ def setup(db):
         last_bar_1m_nq BIGINT,last_bar_1m_mes BIGINT,last_bar_1m_mgc BIGINT)""")
     db.execute("""CREATE TABLE IF NOT EXISTS lucid_orders(
        id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,
-       signal_time BIGINT,entry_time BIGINT,exit_time BIGINT,
+       signal_time BIGINT,entry_time BIGINT,exit_time BIGINT,signal_entry DOUBLE PRECISION,signal_stop DOUBLE PRECISION,signal_tp DOUBLE PRECISION,signal_reason TEXT,
        entry DOUBLE PRECISION,stop DOUBLE PRECISION,initial_stop DOUBLE PRECISION,tp DOUBLE PRECISION,
        qty INTEGER,status TEXT,pnl DOUBLE PRECISION,exit_reason TEXT,exit_price DOUBLE PRECISION,
         timeframe TEXT NOT NULL DEFAULT '5m',signal_context TEXT,entry_context TEXT,exit_context TEXT,strategy_version TEXT)""")
@@ -51,7 +51,10 @@ def setup(db):
             db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS '+col+' TEXT')
         elif col not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
             db.execute('ALTER TABLE lucid_orders ADD COLUMN '+col+' TEXT')
-    numeric_cols={'exit_price':'DOUBLE PRECISION','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION','risk_plan':'DOUBLE PRECISION','mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION','trail_updates':'INTEGER'}
+    if isinstance(db,PgConnection):db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS signal_reason TEXT')
+    elif 'signal_reason' not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
+        db.execute('ALTER TABLE lucid_orders ADD COLUMN signal_reason TEXT')
+    numeric_cols={'signal_entry':'DOUBLE PRECISION','signal_stop':'DOUBLE PRECISION','signal_tp':'DOUBLE PRECISION','exit_price':'DOUBLE PRECISION','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION','risk_plan':'DOUBLE PRECISION','mfe_usd':'DOUBLE PRECISION','mae_usd':'DOUBLE PRECISION','trail_updates':'INTEGER'}
     for col,typ in numeric_cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS '+col+' '+typ)
@@ -128,7 +131,7 @@ def _open(db,trade,bar,history=None,timeframe='5m'):
         db.execute("UPDATE lucid_orders SET status='CANCELLED',exit_reason='CAPACITY_OR_RISK' WHERE id=?",(trade['id'],));return
     entry_context=json.dumps(_trade_context(history or [],int(bar['time']),timeframe),separators=(',',':'))
     entry_slippage=abs(entry-float(bar['open']))*qty*mult
-    risk_plan=abs(entry-stop)*mult*qty
+    risk_plan=risk_unit*qty
     db.execute("UPDATE lucid_orders SET status='OPEN',entry_time=?,entry=?,qty=?,initial_stop=?,entry_context=?,entry_reference=?,entry_slippage_usd=?,risk_plan=?,mfe_usd=0,mae_usd=0,trail_updates=0 WHERE id=?",(bar['time'],entry,qty,stop,entry_context,float(bar['open']),entry_slippage,risk_plan,trade['id']))
 
 def advance(market,bars,interval='5m'):
@@ -167,9 +170,9 @@ def advance(market,bars,interval='5m'):
                             side=sig['side'];stop=float(sig['stop']);tp=float(sig['tp'])
                             if side not in ('LONG','SHORT'):continue
                             ident=f"{VERSION}:{market}:{tile['id']}:{int(bar['time'])}:{side}"
-                            db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty,timeframe,signal_context,strategy_version)
-                               VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,?) ON CONFLICT(id) DO NOTHING""",
-                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-(240 if interval=='1m' else 48)):i+1],int(bar['time']),interval),separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH)))
+                            db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty,timeframe,signal_context,strategy_version,signal_entry,signal_stop,signal_tp,signal_reason)
+                               VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING""",
+                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-(240 if interval=='1m' else 48)):i+1],int(bar['time']),interval),separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH),float(sig['entry']),stop,tp,str(sig.get('reason',''))))
                     scan_allowed=tuple(x for x in SELECTED if not (interval=='5m' and x=='bb_only_short')) if interval=='5m' else ('bb_only_short',)
                     _record_scans(db,'lucid',VERSION,market,tiles,bar,interval,bars[:i+1],scan_allowed)
                 db.execute('UPDATE lucid_account SET '+col+'=? WHERE version=?',(int(bar['time']),VERSION))
