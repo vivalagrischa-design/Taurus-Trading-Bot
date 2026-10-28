@@ -477,6 +477,7 @@ def scan_summary(system='lab',market=None,run_id=None):
                 sql+=' AND market=?';params.append(market)
             sql+=' ORDER BY bar_time'
             rows=db.execute(sql,params).fetchall()
+            history=db.execute('SELECT market,timeframe,COUNT(*) AS bars,MIN(bar_time) AS first_bar,MAX(bar_time) AS last_bar,MAX(source) AS source FROM market_candles WHERE system=? AND run_id=?'+(' AND market=?' if market in MARKETS else '')+' GROUP BY market,timeframe ORDER BY market,timeframe',([system,run_id,market] if market in MARKETS else [system,run_id])).fetchall()
     grouped={}
     for row in rows:
         r=dict(row);key=(r['strategy'],r['market'],r['timeframe'])
@@ -495,7 +496,7 @@ def scan_summary(system='lab',market=None,run_id=None):
         item['latest']={'bar_time':int(r['bar_time']),'state':r['state'],'details':r['details'],
             'phase':phase,'checks':checks,'current_signals':int(r['current_signals'] or 0)}
     return {'system':system,'run_id':run_id,'market':market or 'all','strategies':list(grouped.values()),
-            'bars_scanned':len(rows),'source':'per-candle strategy status checks'}
+            'bars_scanned':len(rows),'market_history':[dict(x) for x in history],'source':'per-candle strategy status checks'}
 
 def summary(market=None):
     with _LOCK:
