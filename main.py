@@ -189,6 +189,17 @@ def lucid_status():
         raise HTTPException(503,'Lucid shadow database not available') from exc
 
 
+
+@app.get('/api/lucid/analytics')
+def lucid_analytics():
+    from lucid_executor import analytics
+    try:
+        return analytics()
+    except Exception as exc:
+        logging.exception('Lucid analytics failed')
+        raise HTTPException(503,'Lucid-Auswertung nicht verfügbar') from exc
+
+
 @app.get('/lucid')
 def lucid_page():
     from fastapi.responses import HTMLResponse
