@@ -164,6 +164,31 @@ def paper(market: str = 'all'):
     result['delayed_nq']=(market=='nq' or market=='all')
     return result
 
+
+@app.get('/api/strategy-scans')
+def strategy_scans(system: str = 'lab', market: str = 'all'):
+    if system not in ('lab','lucid'):
+        raise HTTPException(400,detail='system must be lab or lucid')
+    if market!='all' and market not in FUTURES:
+        raise HTTPException(400,detail='Unbekannter Markt')
+    from paper_engine import scan_summary
+    try:
+        return scan_summary(system,None if market=='all' else market)
+    except Exception as exc:
+        logging.exception('Strategy scan summary failed')
+        raise HTTPException(503,'Strategie-Scan-Auswertung nicht verfügbar') from exc
+
+
+@app.get('/api/archive/day')
+def archive_day(date: str):
+    """Daily read-only export used by the GitHub archival workflow."""
+    from daily_archive import daily_snapshot
+    try:
+        return daily_snapshot(date)
+    except ValueError as exc:
+        raise HTTPException(400,detail=str(exc)) from exc
+
+
 @app.get('/api/lucid')
 def lucid_status():
     from lucid_executor import status
@@ -172,6 +197,17 @@ def lucid_status():
     except Exception as exc:
         logging.exception('Lucid status failed')
         raise HTTPException(503,'Lucid shadow database not available') from exc
+
+
+
+@app.get('/api/lucid/analytics')
+def lucid_analytics():
+    from lucid_executor import analytics
+    try:
+        return analytics()
+    except Exception as exc:
+        logging.exception('Lucid analytics failed')
+        raise HTTPException(503,'Lucid-Auswertung nicht verfügbar') from exc
 
 
 @app.get('/lucid')

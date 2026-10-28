@@ -2,7 +2,9 @@
 Signal bar close -> next bar OPEN. Stops take priority on ambiguous OHLC bars.
 State persisted in SQLite/PostgreSQL. Single process required.
 """
-import os,sqlite3,threading,math,time
+import os,sqlite3,threading,math,time,json,hashlib
+from datetime import datetime,timezone
+from zoneinfo import ZoneInfo
 from strategies import evaluate
 from setup_quality import score_signal
 
@@ -21,6 +23,15 @@ ACTIVE_1M=('opening_drop','opening_reversal')
 ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
 TEST_VERSION='taurus_v7_zero_start_20261026'
+_RULE_FILES=('strategies.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','setup_quality.py','engine.py')
+def _ruleset_hash():
+    h=hashlib.sha256()
+    for name in _RULE_FILES:
+        path=os.path.join(os.path.dirname(__file__),name)
+        if os.path.isfile(path):
+            h.update(name.encode()+b'|');h.update(open(path,'rb').read())
+    return h.hexdigest()[:16]
+STRATEGY_SOURCE_HASH=_ruleset_hash()
 _LOCK=threading.RLock()
 
 
@@ -77,15 +88,24 @@ def init_extra(db):
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
           'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
-          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION'}
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','signal_context':'TEXT','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
         else:
             known={r['name'] for r in db.execute('PRAGMA table_info(trades)').fetchall()}
             if name not in known:db.execute('ALTER TABLE trades ADD COLUMN '+name+' '+sqltype)
-    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT)''')
+    db.execute('''CREATE TABLE IF NOT EXISTS signal_log(id TEXT PRIMARY KEY,market TEXT,strategy TEXT,side TEXT,signal_time BIGINT,decision TEXT,reason TEXT,signal_reason TEXT,signal_entry DOUBLE PRECISION,signal_stop DOUBLE PRECISION,signal_tp DOUBLE PRECISION,context TEXT,strategy_version TEXT)''')
+    for name,sqltype in {'context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT','signal_entry':'DOUBLE PRECISION','signal_stop':'DOUBLE PRECISION','signal_tp':'DOUBLE PRECISION'}.items():
+        if isinstance(db,PgConnection):db.execute('ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
+        else:
+            known={r['name'] for r in db.execute('PRAGMA table_info(signal_log)').fetchall()}
+            if name not in known:db.execute('ALTER TABLE signal_log ADD COLUMN '+name+' '+sqltype)
     db.execute('CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy,market,signal_time)')
+    db.execute('''CREATE TABLE IF NOT EXISTS strategy_scans(system TEXT,run_id TEXT,market TEXT,strategy TEXT,timeframe TEXT,bar_time BIGINT,state TEXT,details TEXT,checks TEXT,current_signals INTEGER,context TEXT,PRIMARY KEY(system,run_id,market,strategy,timeframe,bar_time))''')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_strategy_scans_lookup ON strategy_scans(system,market,strategy,bar_time)')
+    db.execute('''CREATE TABLE IF NOT EXISTS market_candles(system TEXT,run_id TEXT,market TEXT,timeframe TEXT,bar_time BIGINT,open DOUBLE PRECISION,high DOUBLE PRECISION,low DOUBLE PRECISION,close DOUBLE PRECISION,volume DOUBLE PRECISION,source TEXT,PRIMARY KEY(system,run_id,market,timeframe,bar_time))''')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_market_candles_time ON market_candles(system,market,timeframe,bar_time)')
     # Preserve previous test history; initialize this experiment only once.
     db.execute('CREATE TABLE IF NOT EXISTS paper_experiments(version TEXT PRIMARY KEY, started_at BIGINT NOT NULL)')
     existing=db.execute('SELECT started_at FROM paper_experiments WHERE version=?',(TEST_VERSION,)).fetchone()
@@ -98,9 +118,9 @@ def init_extra(db):
 
 
 
-def record_signal(db,trade_id,market,strategy,sig,decision,reason):
-    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
-      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason))
+def record_signal(db,trade_id,market,strategy,sig,decision,reason,context=None):
+    db.execute('INSERT INTO signal_log(id,market,strategy,side,signal_time,decision,reason,signal_reason,signal_entry,signal_stop,signal_tp,context,strategy_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING',
+      (trade_id,market,strategy,sig['side'],int(sig['time']),decision,reason,str(sig.get('reason','')),float(sig.get('entry') or 0),float(sig.get('stop') or 0),float(sig.get('tp') or 0),json.dumps(context,separators=(',',':')) if context else None,str(sig.get('version') or STRATEGY_SOURCE_HASH)))
 
 
 def _slipped(price,side,is_entry,market=None):
@@ -117,7 +137,7 @@ def _signals_for_last_5m(market,bars5m,bars1m=None):
         for sig in st['signals']:
             if sig['time']==bars5m[-1]['time']:
                 out.append((st['id'],sig))
-    return out
+    return out,tiles
 
 
 def _signals_for_last_1m(market,bars1m,bars5m):
@@ -128,12 +148,13 @@ def _signals_for_last_1m(market,bars1m,bars5m):
         for sig in st['signals']:
             if sig['time']==bars1m[-1]['time']:
                 out.append((st['id'],sig))
-    return out
+    return out,tiles
 
 
 def _signals_for_last_extremes(market,bars1m,bars5m):
     from bb_rsi import build
-    return [(st['id'],sig) for st in build(bars1m) if st['id'] in ACTIVE_EXTREMES for sig in st['signals'] if sig['time']==bars1m[-1]['time']]
+    tiles=build(bars1m)
+    return [(st['id'],sig) for st in tiles if st['id'] in ACTIVE_EXTREMES for sig in st['signals'] if sig['time']==bars1m[-1]['time']],tiles
 
 
 def _entry_indicators(history):
@@ -233,10 +254,12 @@ def _open_pending(db,market,bar,history,suffix):
         if qty<=0 or risk_plan>RISK+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
         bbpos,pct,rsi=_entry_indicators(history)
-        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=? WHERE id=?",
+        multiplier=FUTURES[market][0] if market in FUTURES else 1
+        entry_slippage=abs(entry-float(bar['open']))*qty*multiplier
+        db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=?,entry_context=?,entry_reference=?,entry_slippage_usd=? WHERE id=?",
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
                     _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
-                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,t['id']))
+                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time']),'1m' if suffix in ('1m','extremes') else '5m'),separators=(',',':')),float(bar['open']),entry_slippage,t['id']))
 
 
 def _net_break_even_stop(entry,side,market):
@@ -260,7 +283,7 @@ def _estimated_net_at_stop(trade,stop,market):
     return round(gross-fees,4)
 
 
-def _close_open(db,market,bar,suffix):
+def _close_open(db,market,bar,suffix,history=None):
     strategies=_engine_strategies(suffix)
     marks=','.join('?' for _ in strategies)
     rows=db.execute("SELECT * FROM trades WHERE market=? AND status='OPEN' AND entry_time<=? AND strategy IN ("+marks+")",
@@ -309,12 +332,66 @@ def _close_open(db,market,bar,suffix):
         gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*multiplier
         fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
         pnl=gross-fees
-        db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=? WHERE id=?",
-                   (bar['time'],exit_price,round(pnl,4),reason,t['id']))
+        exit_context=_trade_context(history or [bar],int(bar['time']),'1m' if suffix=='1m' else '5m')
+        db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=?,exit_context=?,exit_reference=?,exit_slippage_usd=?,gross_pnl=?,fees_paid=? WHERE id=?",
+                   (bar['time'],exit_price,round(pnl,4),reason,json.dumps(exit_context,separators=(',',':')),raw,abs(exit_price-raw)*float(t['qty'])*multiplier,gross,fees,t['id']))
 
 
 def _progress_key(market, suffix='5m'):
     return market if suffix=='5m' else f'{market}:{suffix}'
+
+
+def _trade_context(bars,stamp,timeframe='5m'):
+    prior=[b for b in bars if int(b['time'])<=int(stamp)]
+    minutes=1 if timeframe=='1m' else 5
+    windows={15:max(1,15//minutes),60:max(1,60//minutes),240:max(1,240//minutes)}
+    tail=prior[-(windows[240]+1):]
+    if not tail:return {'phase':'unknown','reason':'no_prior_candles','timeframe':timeframe,'candles':[]}
+    closes=[float(b['close']) for b in tail]
+    def ret(horizon):
+        if len(closes)<=horizon or not closes[-1-horizon]:return None
+        return (closes[-1]-closes[-1-horizon])/closes[-1-horizon]
+    r15,r60,r240=(ret(windows[n]) for n in (15,60,240))
+    phase=('up' if r60 is not None and r60>0.001 else 'down' if r60 is not None and r60<-.001 else 'sideways' if r60 is not None else 'unknown')
+    hour_bars=tail[-(windows[60]+1):]
+    mean_close=sum(float(b['close']) for b in hour_bars)/len(hour_bars)
+    range_60m=(max(float(b['high']) for b in hour_bars)-min(float(b['low']) for b in hour_bars))/mean_close if mean_close else None
+    moves=[abs(float(hour_bars[j]['close'])-float(hour_bars[j-1]['close'])) for j in range(1,len(hour_bars))]
+    efficiency=abs(float(hour_bars[-1]['close'])-float(hour_bars[0]['close']))/sum(moves) if moves and sum(moves)>0 else None
+    last=tail[-1]; rng=max(float(last['high'])-float(last['low']),1e-12); body=abs(float(last['close'])-float(last['open']))
+    local=datetime.fromtimestamp(int(stamp),timezone.utc).astimezone(ZoneInfo('America/New_York'))
+    minute=local.hour*60+local.minute
+    session='premarket' if minute<570 else 'regular' if minute<960 else 'after_hours'
+    stored=tail[-25:]
+    return {'phase':phase,'timeframe':timeframe,'data_source':'Yahoo Finance delayed futures proxy','strategy_source_hash':STRATEGY_SOURCE_HASH,'return_15m':r15,'return_60m':r60,'return_240m':r240,
+            'range_60m_pct':range_60m,'efficiency_ratio_60m':efficiency,'ny_session':session,
+            'ny_hour':local.hour,'weekday':local.weekday(),'last_candle':{'time':int(last['time']),'open':float(last['open']),'high':float(last['high']),'low':float(last['low']),'close':float(last['close']),'volume':float(last.get('volume',0) or 0),'direction':'up' if last['close']>last['open'] else 'down' if last['close']<last['open'] else 'flat','body_range_ratio':body/rng,'upper_wick_ratio':(float(last['high'])-max(float(last['open']),float(last['close'])))/rng,'lower_wick_ratio':(min(float(last['open']),float(last['close']))-float(last['low']))/rng},
+            'candles':[{'time':int(b['time']),'open':float(b['open']),'high':float(b['high']),'low':float(b['low']),'close':float(b['close']),'volume':float(b.get('volume',0) or 0)} for b in stored]}
+
+
+
+def _save_market_candles(db,system,run_id,market,timeframe,bars):
+    for b in bars or []:
+        db.execute('''INSERT INTO market_candles(system,run_id,market,timeframe,bar_time,open,high,low,close,volume,source)
+                      VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(system,run_id,market,timeframe,bar_time) DO NOTHING''',
+                   (system,run_id,market,timeframe,int(b['time']),float(b['open']),float(b['high']),float(b['low']),float(b['close']),float(b.get('volume',0) or 0),'Yahoo Finance delayed futures proxy'))
+
+
+def _record_scans(db,system,run_id,market,tiles,bar,timeframe,bars,allowed_strategies=None):
+    stamp=int(bar['time'])
+    snapshot=_trade_context(bars,stamp,timeframe)
+    snapshot.pop('candles',None)
+    context=json.dumps(snapshot,separators=(',',':'))
+    allowed=set(allowed_strategies) if allowed_strategies is not None else set(_engine_strategies(timeframe))
+    for tile in tiles or []:
+        strategy=tile.get('id')
+        if strategy not in allowed:continue
+        signals=sum(1 for sig in tile.get('signals',[]) if int(sig.get('time',-1))==stamp)
+        db.execute('''INSERT INTO strategy_scans(system,run_id,market,strategy,timeframe,bar_time,state,details,checks,current_signals,context)
+                      VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(system,run_id,market,strategy,timeframe,bar_time) DO UPDATE SET
+                      state=excluded.state,details=excluded.details,checks=excluded.checks,current_signals=excluded.current_signals,context=excluded.context''',
+                   (system,run_id,market,strategy,timeframe,stamp,str(tile.get('state','unknown')),str(tile.get('details','')),
+                    json.dumps(tile.get('checks',[]),separators=(',',':')),signals,context))
 
 
 def _advance_generic(market,bars,signal_lookup,suffix='5m'):
@@ -326,12 +403,14 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
         with conn() as db:
             row=db.execute('SELECT last_bar FROM progress WHERE market=?',(key,)).fetchone()
             if row is None:
+                _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ('1m','extremes') else '5m',bars)
                 db.execute('INSERT INTO progress VALUES (?,?)',(key,last))
                 return {'processed':0,'reason':'first observation; no historical paper fills'}
             last_seen=int(row['last_bar'])
             if last<last_seen: return {'processed':0,'reason':'data older than watermark'}
             pending=[(i,b) for i,b in enumerate(bars) if b['time']>last_seen]
             if not pending: return {'processed':0,'reason':'no new complete candle'}
+            _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ('1m','extremes') else '5m',[b for _,b in pending])
             if pending[0][1]['time']>last_seen+step:
                 db.execute("UPDATE trades SET status='UNKNOWN',exit_reason='DATA_GAP' WHERE market=? AND strategy IN ("+','.join('?' for _ in _engine_strategies(suffix))+") AND status IN ('OPEN','PENDING')",(market,*_engine_strategies(suffix)))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(last,key))
@@ -343,20 +422,26 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                     db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key)); continue
                 _add_scaled_legs(db,market,b,suffix)
                 _open_pending(db,market,b,bars[:i],suffix)
-                _close_open(db,market,b,suffix)
-                for strategy,sig in signal_lookup(i):
+                _close_open(db,market,b,suffix,bars[:i+1])
+                scan_result=signal_lookup(i)
+                if isinstance(scan_result,tuple):signals,tiles=scan_result
+                else:signals,tiles=scan_result,None
+                _record_scans(db,'lab',TEST_VERSION,market,tiles,b,'1m' if suffix in ('1m','extremes') else '5m',bars[:i+1],_engine_strategies(suffix))
+                for strategy,sig in signals:
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
                     quality=score_signal(sig,bars[:i+1])
                     score_note='QUALITY_'+str(quality['score'])+'_'+quality['grade']
+                    context_bars=bars[max(0,i-(240 if suffix in ('1m','extremes') else 48)):i+1]
+                    signal_context=_trade_context(context_bars,int(sig['time']),'1m' if suffix in ('1m','extremes') else '5m')
                     exists=db.execute("SELECT 1 FROM trades WHERE market=? AND strategy=? AND status IN ('PENDING','OPEN')",(market,strategy)).fetchone()
                     if exists:
-                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note)
+                        record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note,signal_context)
                         continue
-                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note)
-                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe)
-                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?)''',
-                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m')))
+                    record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note,signal_context)
+                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version,signal_reason)
+                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?,?)''',
+                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH),str(sig.get('reason',''))))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key))
                 count+=1
             return {'processed':count,'reason':'updated'}
@@ -376,6 +461,44 @@ def advance_extremes(market,bars1m,bars5m):
     return _advance_generic(market,bars1m,lambda i:_signals_for_last_extremes(market,bars1m[:i+1],bars5m),'extremes')
 
 
+
+def scan_summary(system='lab',market=None,run_id=None):
+    if system not in ('lab','lucid'):
+        raise ValueError('system must be lab or lucid')
+    if run_id is None:
+        if system=='lab':run_id=TEST_VERSION
+        else:
+            from lucid_executor import VERSION as run_id
+    with _LOCK:
+        with conn() as db:
+            sql='SELECT * FROM strategy_scans WHERE system=? AND run_id=?'
+            params=[system,run_id]
+            if market in MARKETS:
+                sql+=' AND market=?';params.append(market)
+            sql+=' ORDER BY bar_time'
+            rows=db.execute(sql,params).fetchall()
+            history=db.execute('SELECT market,timeframe,COUNT(*) AS bars,MIN(bar_time) AS first_bar,MAX(bar_time) AS last_bar,MAX(source) AS source FROM market_candles WHERE system=? AND run_id=?'+(' AND market=?' if market in MARKETS else '')+' GROUP BY market,timeframe ORDER BY market,timeframe',([system,run_id,market] if market in MARKETS else [system,run_id])).fetchall()
+    grouped={}
+    for row in rows:
+        r=dict(row);key=(r['strategy'],r['market'],r['timeframe'])
+        item=grouped.setdefault(key,{'strategy':r['strategy'],'market':r['market'],'timeframe':r['timeframe'],
+            'bars_scanned':0,'signal_bars':0,'phases':{},'phase_signals':{},'checks':{},'latest':None})
+        item['bars_scanned']+=1;item['signal_bars']+=int(r['current_signals'] or 0)
+        try:context=json.loads(r['context'] or '{}')
+        except Exception:context={}
+        phase=context.get('phase','unknown')
+        item['phases'][phase]=item['phases'].get(phase,0)+1
+        item['phase_signals'][phase]=item['phase_signals'].get(phase,0)+int(r['current_signals'] or 0)
+        try:checks=json.loads(r['checks'] or '[]')
+        except Exception:checks=[]
+        for label,state in checks:
+            counts=item['checks'].setdefault(label,{})
+            counts[state]=counts.get(state,0)+1
+        item['latest']={'bar_time':int(r['bar_time']),'state':r['state'],'details':r['details'],
+            'phase':phase,'checks':checks,'current_signals':int(r['current_signals'] or 0)}
+    return {'system':system,'run_id':run_id,'market':market or 'all','strategies':list(grouped.values()),
+            'bars_scanned':len(rows),'market_history':[dict(x) for x in history],'source':'per-candle strategy status checks'}
+
 def summary(market=None):
     with _LOCK:
         with conn() as db:
@@ -384,7 +507,7 @@ def summary(market=None):
             sql='SELECT * FROM trades WHERE signal_time>=?'; params=[started]
             if market in MARKETS:
                 sql+=' AND market=?'; params.append(market)
-            sql+=' ORDER BY signal_time DESC LIMIT 700'
+            sql+=' ORDER BY signal_time DESC'
             trades=[dict(t) for t in db.execute(sql,params)]
             aggregate={}
             for strategy in ALL_STRATS:
@@ -399,6 +522,6 @@ def summary(market=None):
                     'pnl':round(sum(t['pnl'] or 0 for t in closed),2)
                 }
             last={r['market']:r['last_bar'] for r in db.execute('SELECT market,last_bar FROM progress').fetchall()}
-            events=[dict(r) for r in db.execute('SELECT * FROM signal_log WHERE signal_time>=? ORDER BY signal_time DESC LIMIT 1000',(started,)).fetchall()]
+            events=[dict(r) for r in db.execute('SELECT * FROM signal_log WHERE signal_time>=? ORDER BY signal_time DESC',(started,)).fetchall()]
             return {'events':events,'trades':trades,'summary':aggregate,'last_processed':last,'risk_usd':RISK,
                     'paper_only':True,'experiment':TEST_VERSION,'experiment_started_at':started,'persistence':'PostgreSQL' if DATABASE_URL else DB,'markets':list(MARKETS)}
