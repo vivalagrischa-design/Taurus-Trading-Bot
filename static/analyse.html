@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TAURUS · Analyse</title>
+<style>
+:root{--bg:#0c1420;--panel:#15202e;--line:#2c3d52;--txt:#e6edf6;--mut:#9fb0c5;--green:#1f8a63;--lgreen:#17483b;--red:#a63a49;--lred:#4a2530;--grey:#263444;--amber:#e8bc5a;--acc:#9f8eff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.45 system-ui,-apple-system,sans-serif}
+a{color:#8bcaff;text-decoration:none}header{padding:14px 20px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px solid var(--line);background:#101925}
+h1{font-size:19px;margin:0}h2{font-size:17px;margin:22px 0 8px}h3{font-size:14px;margin:16px 0 6px;color:#d8d1ff}
+nav{display:flex;gap:6px;padding:12px 20px;overflow-x:auto;background:#101925;border-bottom:1px solid var(--line)}
+nav button{white-space:nowrap;background:#202d3e;color:var(--txt);border:1px solid #43536b;border-radius:9px;padding:9px 14px;font-size:13px;cursor:pointer}
+nav button.active{background:#332e64;border-color:var(--acc)}main{padding:16px 20px;max-width:1300px;margin:0 auto}
+.page{display:none}.page.active{display:block}.mut{color:var(--mut)}.small{font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.arrow{font-size:72px;line-height:1;font-weight:700}.mname{font-size:13px;color:var(--mut);letter-spacing:1px}
+.regime{font-size:18px;font-weight:700;margin:4px 0}.kv{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:13px;margin:10px 0}
+.kv span:nth-child(odd){color:var(--mut)}
+.chip{display:inline-block;border-radius:7px;padding:2px 8px;margin:2px 3px 2px 0;font-size:12px;border:1px solid transparent}
+.GRUEN{background:var(--green)}.TENDENZ_PLUS{background:var(--lgreen);border-color:#2a7a60}.ROT{background:var(--red)}.TENDENZ_MINUS{background:var(--lred);border-color:#8a3a48}.ZU_WENIG{background:var(--grey);color:var(--mut)}.NEUTRAL{background:#3a3a2a}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:7px 9px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{color:var(--mut);font-weight:600;position:sticky;top:0;background:var(--bg)}
+.wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:12px}
+td.cell{cursor:pointer;text-align:center;min-width:104px;line-height:1.25}td.cell b{font-size:14px}td.cell div{font-size:11px;opacity:.85}
+.pos{color:#38d3a1}.neg{color:#ff7185}
+.controls{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:10px 0}.controls label{font-size:12px;color:var(--mut);display:flex;flex-direction:column;gap:4px}
+select,input[type=number]{background:#202d3e;color:var(--txt);border:1px solid #43536b;border-radius:8px;padding:8px}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;font-size:12px}
+.note{background:#443821;border:1px solid #6b5a2b;border-radius:10px;padding:10px 14px;font-size:13px;margin:10px 0;color:#f2dca9}
+.bar{height:10px;border-radius:5px;background:var(--grey);min-width:60px;position:relative;overflow:hidden}.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--green)}
+.pb{margin:10px 0}.pb h3{margin:0 0 4px}.empty{padding:26px;text-align:center;color:var(--mut)}
+</style></head><body>
+<header><h1>TAURUS · Analyse</h1><div><a href="/">← TAURUS Lab</a> · <a href="/lucid">Lucid</a> · <a href="/static/results.html">Strategie-Grafiken</a></div></header>
+<nav id="tabs">
+<button class="active" data-p="p1">1 · Markt jetzt</button>
+<button data-p="p2">2 · Trades</button>
+<button data-p="p3">3 · Einstiegsanalyse</button>
+<button data-p="p4">4 · Strategie × Marktlage</button>
+</nav>
+<main>
+<div class="note" id="status">Lade …</div>
+
+<section class="page active" id="p1">
+<h2>Wie läuft der Markt gerade?</h2>
+<p class="mut small">Berechnet aus den abgeschlossenen 5-Minuten-Kerzen (Yahoo, verzögert). Aktualisiert sich jede Minute. Darunter: was in genau dieser Lage bisher funktioniert hat.</p>
+<div class="cards" id="marketCards"></div>
+</section>
+
+<section class="page" id="p2">
+<h2>Trade-Journal mit Marktlage</h2>
+<div class="controls">
+<label>Strategie<select id="fStrat"></select></label>
+<label>Marktlage<select id="fReg"></select></label>
+<label>Urteil<select id="fVer"></select></label>
+</div>
+<div class="wrap"><table><thead><tr><th>Signal (CH)</th><th>Markt</th><th>Strategie</th><th>Richtung</th><th>Marktlage</th><th>Volatilität</th><th>Session</th><th>vs. Trend</th><th>Dauer</th><th>MFE R</th><th>MAE R</th><th>R</th><th>USD</th><th>Urteil</th></tr></thead><tbody id="tradeRows"></tbody></table></div>
+<p class="small mut" id="tradeCount"></p>
+</section>
+
+<section class="page" id="p3">
+<h2>Falsche vs. gute Einstiege</h2>
+<div class="note">„Falscher Einstieg“ = Verlust, obwohl der Trade nie 0.5R im Plus war. „Rückgabe“ = war mindestens 1R im Plus, endete trotzdem im Verlust (das ist ein <b>Ausstiegs</b>-, kein Einstiegsproblem).</div>
+<div id="verdicts"></div>
+<h3>Schlechteste und beste Kombinationen (Strategie · Marktlage · Richtung vs. Trend)</h3>
+<div class="cards"><div class="card"><b>Meiden</b><div id="worst"></div></div><div class="card"><b>Bevorzugen</b><div id="best"></div></div></div>
+<h3>Tageszeit (Stunde, Schweizer Zeit)</h3><div class="wrap"><table><thead><tr><th>Stunde</th><th>Trades</th><th>Trefferquote</th><th></th><th>Ø R</th><th>Netto USD</th></tr></thead><tbody id="hourRows"></tbody></table></div>
+<h3>Kennzahlen beim Einstieg: wo häufen sich Verluste?</h3><div id="featBlocks"></div>
+<h3>Haltedauer und Zeit-Ausstieg</h3><div id="holds"></div><div id="exitTiming"></div>
+</section>
+
+<section class="page" id="p4">
+<h2>Welche Strategie in welcher Marktlage?</h2>
+<div class="controls">
+<label>Spalten nach<select id="dim"></select></label>
+<label>Markt<select id="mkt"><option value="all">Alle</option><option value="nq">MNQ</option><option value="mes">MES</option><option value="mgc">MGC</option></select></label>
+<label>Mindestanzahl Trades<input type="number" id="minN" value="10" min="3" max="100" style="width:90px"></label>
+</div>
+<div class="legend"><span class="chip GRUEN">klar positiv</span><span class="chip TENDENZ_PLUS">Tendenz positiv</span><span class="chip NEUTRAL">neutral</span><span class="chip TENDENZ_MINUS">Tendenz negativ</span><span class="chip ROT">klar negativ</span><span class="chip ZU_WENIG">zu wenig Trades</span></div>
+<p class="small mut">„Klar“ heisst: das 95%-Intervall des Ø-R liegt ganz über bzw. unter 0. Alles andere ist eine Tendenz und noch kein Beleg. Zelle = Gewinner / Trades, darunter Ø R pro Trade und Trefferquote. Zelle anklicken zeigt die Trades.</p>
+<div class="wrap"><table id="matrix"></table></div>
+<h3 id="cellTitle"></h3><div class="wrap" id="cellWrap" style="display:none"><table><tbody id="cellRows"></tbody></table></div>
+<h2>Playbook: laufen lassen / abschalten</h2>
+<p class="small mut">Nur nach Marktlage. „Laufen lassen“ und „Abschalten“ erscheinen erst, wenn das Ergebnis statistisch klar ist; Tendenzen sind separat markiert.</p>
+<div id="playbook"></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=x=>String(x??'—').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const MK={nq:'MNQ',mes:'MES',mgc:'MGC'};
+const RG={TREND_HOCH:'Trend hoch',TREND_RUNTER:'Trend runter',RANGE:'Seitwärts, ruhig',CHOP:'Chop (volatil, ohne Richtung)',UEBERGANG:'Übergang',UNBEKANNT:'Unbekannt'};
+const VD={GEWINN:'Gewinn',FALSCHER_EINSTIEG:'Falscher Einstieg',RUECKGABE:'Rückgabe (Ausstieg)',VERLUST_TEILWEISE:'Verlust, teils im Plus',VERLUST_UNKLAR:'Verlust (ohne MFE)'};
+const LBL={UNBEKANNT:'Unbekannt',MIT_TREND:'Mit Trend',GEGEN_TREND:'Gegen Trend',NEUTRAL:'Neutral',RUHIG:'Ruhig',NORMAL:'Normal',HEKTISCH:'Hektisch',ASIEN:'Asien/Nacht',EUROPA:'Europa',USA_OPEN:'USA Open',USA:'USA',USA_NACHBOERSE:'USA nachbörslich'};
+const lab=v=>RG[v]||LBL[v]||v;
+const pct=x=>x==null?'—':(x*100).toFixed(0)+'%';
+const r2=x=>x==null?'—':(x>=0?'+':'')+x.toFixed(2);
+const usd=x=>x==null?'—':(x>=0?'+':'')+x.toFixed(0);
+const cls=x=>x==null?'':x>=0?'pos':'neg';
+const dt=t=>t?new Date(t*1000).toLocaleString('de-CH',{timeZone:'Europe/Zurich',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
+let REPORT=null,MARKET=null;
+
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('active',x===b));
+ document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id===b.dataset.p));
+ if(location.hash!=='#'+b.dataset.p)history.replaceState(null,'','#'+b.dataset.p);});
+if(['#p1','#p2','#p3','#p4'].includes(location.hash))document.querySelector(`#tabs button[data-p="${location.hash.slice(1)}"]`).click();
+
+async function api(url){const r=await fetch(url);if(!r.ok)throw new Error(url+' → '+r.status);return r.json();}
+
+async function loadMarket(){
+ try{MARKET=await api('/api/analysis/market?min_n='+$('minN').value);renderMarket();}
+ catch(e){$('marketCards').innerHTML='<div class="empty">'+esc(e.message)+'</div>';}
+}
+async function loadReport(){
+ try{
+  REPORT=await api(`/api/analysis/report?dim=${$('dim').value||'regime'}&market=${$('mkt').value}&min_n=${$('minN').value}`);
+  renderAll();
+ }catch(e){$('status').textContent='Fehler: '+e.message;}
+}
+
+function renderMarket(){
+ const box=$('marketCards');box.innerHTML='';
+ MARKET.markets.forEach(m=>{
+  const g=m.hints.filter(h=>h.verdict==='GRUEN'),tg=m.hints.filter(h=>h.verdict==='TENDENZ_PLUS'),
+        r=m.hints.filter(h=>h.verdict==='ROT'),tr=m.hints.filter(h=>h.verdict==='TENDENZ_MINUS');
+  const chips=(a,c)=>a.map(h=>`<span class="chip ${c}" title="${h.n} Trades">${esc(h.strategy)} ${r2(h.avg_r)}R (${h.n})</span>`).join('')||'<span class="mut small">–</span>';
+  const el=document.createElement('div');el.className='card';
+  el.innerHTML=`<div class="mname">${MK[m.market]}</div><div class="arrow">${esc(m.arrow)}</div><div class="regime">${esc(lab(m.regime))}</div>
+  <div class="kv"><span>Session</span><span>${esc(lab(m.session))}</span><span>Volatilität</span><span>${esc(lab(m.vol))}</span>
+  <span>ADX (Trendstärke)</span><span>${m.adx??'—'}</span><span>ATR-Perzentil</span><span>${pct(m.atr_pct)}</span>
+  <span>RSI (5M)</span><span>${m.rsi??'—'}</span><span>Abstand VWAP (ATR)</span><span>${m.dist_vwap_atr??'—'}</span>
+  <span>Kerze bis</span><span>${dt(m.time)}</span></div>
+  <h3>In dieser Lage bisher</h3>
+  <div class="small mut">Klar gut</div>${chips(g,'GRUEN')}<div class="small mut">Tendenz gut</div>${chips(tg,'TENDENZ_PLUS')}
+  <div class="small mut">Tendenz schlecht</div>${chips(tr,'TENDENZ_MINUS')}<div class="small mut">Klar schlecht</div>${chips(r,'ROT')}`;
+  box.appendChild(el);});
+}
+
+function fillSelect(sel,values,all,fmt){const cur=sel.value;sel.innerHTML=`<option value="">${all}</option>`+values.map(v=>`<option value="${esc(v)}">${esc(fmt?fmt(v):v)}</option>`).join('');sel.value=values.includes(cur)?cur:'';}
+
+function renderAll(){
+ const n=REPORT.data_notes;
+ $('status').innerHTML=`Datenbasis: <b>${n.closed}</b> geschlossene Trades, davon ${n.with_regime} mit zugeordneter Marktlage, ${n.with_mfe} mit MFE/MAE · Speicher: <b>${esc(REPORT.persistence)}</b>`+
+  (String(REPORT.persistence).startsWith('/')?' · <b style="color:#ff9a9a">Achtung: temporäre Datei, Daten gehen bei Neustart verloren. DATABASE_URL (PostgreSQL) setzen!</b>':'')+
+  (n.closed<60?' · <b>Noch wenig Daten: alles unten sind Hypothesen, keine Belege.</b>':'');
+ renderTrades();renderEntries();renderMatrix();
+}
+
+function renderTrades(){
+ const T=REPORT.trades;
+ if(!$('fStrat').dataset.ready){
+  fillSelect($('fStrat'),[...new Set(T.map(t=>t.strategy))].sort(),'Alle');
+  fillSelect($('fReg'),[...new Set(T.map(t=>t.regime))].sort(),'Alle',lab);
+  fillSelect($('fVer'),Object.keys(VD),'Alle',v=>VD[v]);
+  ['fStrat','fReg','fVer'].forEach(i=>$(i).onchange=renderTrades);$('fStrat').dataset.ready=1;}
+ const s=$('fStrat').value,r=$('fReg').value,v=$('fVer').value;
+ const rows=T.filter(t=>(!s||t.strategy===s)&&(!r||t.regime===r)&&(!v||t.verdict===v)).slice(0,400);
+ $('tradeRows').innerHTML=rows.map(t=>`<tr><td>${dt(t.signal_time)}</td><td>${MK[t.market]}</td><td>${esc(t.strategy)}</td><td>${esc(t.side)}</td><td>${esc(lab(t.regime))}</td><td>${esc(lab(t.vol))}</td><td>${esc(lab(t.session))}</td><td>${esc(lab(t.side_vs_trend))}</td><td>${t.hold_min==null?'—':Math.round(t.hold_min)+' min'}</td><td>${r2(t.mfe_r)}</td><td>${r2(t.mae_r)}</td><td class="${cls(t.r)}">${r2(t.r)}</td><td class="${cls(t.pnl)}">${usd(t.pnl)}</td><td>${esc(t.status==='OPEN'?'offen':VD[t.verdict]||'—')}</td></tr>`).join('')||'<tr><td colspan="14" class="empty">Keine Trades</td></tr>';
+ $('tradeCount').textContent=`${rows.length} von ${T.length} Trades angezeigt (neueste zuerst)`;
+}
+
+function statChip(st){return `<span class="chip ${st.verdict}">${st.wins??0}/${st.n} · ${r2(st.avg_r)}R</span>`;}
+function comboList(a){return a.map(x=>`<div style="margin:6px 0"><b>${esc(x.strategy)}</b> · ${esc(lab(x.regime))} · ${esc(lab(x.side_vs_trend))}<br>${statChip(x)} <span class="small mut">Trefferquote ${pct(x.win_rate)}, ${usd(x.sum_usd)} USD</span></div>`).join('')||'<div class="mut small">Noch zu wenig Trades pro Kombination.</div>';}
+
+function renderEntries(){
+ const E=REPORT.entries,V=E.verdicts,tot=Object.values(V).reduce((a,b)=>a+b,0)||1;
+ const strats=Object.keys(E.per_strategy).sort();
+ $('verdicts').innerHTML=`<div class="wrap"><table><thead><tr><th>Strategie</th>${Object.keys(VD).map(k=>`<th>${VD[k]}</th>`).join('')}</tr></thead><tbody>
+ <tr><td><b>Alle</b></td>${Object.keys(VD).map(k=>`<td>${V[k]||0} <span class="mut small">(${pct((V[k]||0)/tot)})</span></td>`).join('')}</tr>
+ ${strats.map(s=>{const p=E.per_strategy[s],sum=Object.values(p).reduce((a,b)=>a+b,0);return `<tr><td>${esc(s)}</td>${Object.keys(VD).map(k=>`<td>${p[k]||0} <span class="mut small">(${pct((p[k]||0)/sum)})</span></td>`).join('')}</tr>`}).join('')}</tbody></table></div>`;
+ $('worst').innerHTML=comboList(E.worst);$('best').innerHTML=comboList(E.best);
+ $('hourRows').innerHTML=E.hours.map(h=>`<tr><td>${String(h.hour).padStart(2,'0')}:00</td><td>${h.n}</td><td>${h.wins}/${h.n} (${pct(h.win_rate)})</td><td><div class="bar"><i style="width:${(h.win_rate*100).toFixed(0)}%"></i></div></td><td class="${cls(h.avg_r)}">${r2(h.avg_r)}</td><td class="${cls(h.sum_usd)}">${usd(h.sum_usd)}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">Noch keine Daten</td></tr>';
+ const FN={adx:'ADX (Trendstärke)',atr_pct:'ATR-Perzentil (Volatilität)',rsi:'RSI 5M',dist_vwap_atr:'Abstand zum VWAP (in ATR)',bb_width_pct:'Bollinger-Breite (Perzentil)',er60:'Effizienz 60 Min. (1 = gerader Trend)',ema_gap_atr:'EMA20 − EMA50 (in ATR)',last_body_atr:'Signalkerze (Körper in ATR)'};
+ $('featBlocks').innerHTML=Object.entries(E.features).map(([k,f])=>`<div class="pb"><b>${FN[k]||k}</b> <span class="small mut">· Median Gewinner ${f.median_winners??'—'} vs. Verlierer ${f.median_losers??'—'}</span><div class="wrap"><table><tbody>${f.buckets.map(b=>`<tr><td>${esc(b.label)}</td><td>${statChip(b)}</td><td class="small mut">Trefferquote ${pct(b.win_rate)}</td></tr>`).join('')}</tbody></table></div></div>`).join('')||'<div class="empty">Noch zu wenig Trades mit Kennzahlen.</div>';
+ const H=REPORT.hold_times;
+ $('holds').innerHTML=`<div class="wrap"><table><thead><tr><th>Strategie</th><th>Median Haltedauer Gewinner</th><th>Median Haltedauer Verlierer</th></tr></thead><tbody>${Object.entries(H).map(([s,h])=>`<tr><td>${esc(s)}</td><td>${h.median_winners_min==null?'—':Math.round(h.median_winners_min)+' min ('+h.n_w+')'}</td><td>${h.median_losers_min==null?'—':Math.round(h.median_losers_min)+' min ('+h.n_l+')'}</td></tr>`).join('')}</tbody></table></div>`;
+ const X=REPORT.exit_timing;
+ $('exitTiming').innerHTML=X.trades_with_path?`<h3>Wenn ein Trade nach X Minuten noch nicht im Plus ist …</h3><div class="wrap"><table><thead><tr><th>Nach</th><th>noch im Minus: Trades</th><th>davon am Ende Gewinner</th><th>Ø R am Ende</th><th>im Plus: Trades</th><th>davon am Ende Gewinner</th><th>Ø R am Ende</th></tr></thead><tbody>${X.checkpoints.map(c=>`<tr><td>${c.minutes} min</td><td>${c.behind.n}</td><td>${pct(c.behind.win_rate)}</td><td class="${cls(c.behind.avg_r)}">${r2(c.behind.avg_r)}</td><td>${c.ahead.n}</td><td>${pct(c.ahead.win_rate)}</td><td class="${cls(c.ahead.avg_r)}">${r2(c.ahead.avg_r)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="small mut">Zeit-Ausstieg: Der Verlauf je Kerze wird erst ab jetzt mitgeloggt. Erste Auswertung nach einigen abgeschlossenen Trades.</p>';
+}
+
+function bg(v){return `class="cell ${v}"`;}
+function renderMatrix(){
+ const M=REPORT.matrix;
+ const head=`<thead><tr><th>Strategie</th><th>Gesamt</th>${M.columns.map(c=>`<th style="text-align:center">${esc(M.dim==='hour_zh'?c+':00':lab(c))}<div class="small mut">${M.column_totals[c].n} Trades</div></th>`).join('')}</tr></thead>`;
+ const cell=(st,s,c)=>st?`<td ${bg(st.verdict)} data-s="${esc(s)}" data-c="${esc(c)}"><b>${st.wins}/${st.n}</b><div>${r2(st.avg_r)}R · ${pct(st.win_rate)}</div><div>PF ${st.profit_factor==null?'∞':st.profit_factor.toFixed(1)}</div></td>`:'<td class="cell ZU_WENIG">–</td>';
+ const body=M.strategies.map(s=>`<tr><td><b>${esc(s)}</b></td>${cell(M.totals[s],s,'')}${M.columns.map(c=>cell(M.cells[s][c],s,c)).join('')}</tr>`).join('');
+ $('matrix').innerHTML=head+'<tbody>'+body+`<tr><td><b>Alle Strategien</b></td>${cell(M.all,'','')}${M.columns.map(c=>cell(M.column_totals[c],'',c)).join('')}</tr></tbody>`;
+ $('matrix').querySelectorAll('td[data-s]').forEach(td=>td.onclick=()=>showCell(td.dataset.s,td.dataset.c));
+ $('playbook').innerHTML=REPORT.playbook.map(p=>{
+  const t=a=>a.map(x=>`<span class="chip ${a===p.run?'GRUEN':a===p.stop?'ROT':a===p.lean_run?'TENDENZ_PLUS':a===p.lean_stop?'TENDENZ_MINUS':'ZU_WENIG'}">${esc(lab(x.regime))} · ${x.n} Trades · ${r2(x.avg_r)}R</span>`).join('')||'<span class="mut small">–</span>';
+  return `<div class="card pb"><h3>${esc(p.strategy)} <span class="small mut">· gesamt ${p.total.wins}/${p.total.n}, ${r2(p.total.avg_r)}R</span></h3>
+  <div class="small mut">✅ Laufen lassen (klar positiv)</div>${t(p.run)}<div class="small mut">⛔ Abschalten (klar negativ)</div>${t(p.stop)}
+  <div class="small mut">Tendenz positiv (noch nicht belegt)</div>${t(p.lean_run)}<div class="small mut">Tendenz negativ (noch nicht belegt)</div>${t(p.lean_stop)}
+  <div class="small mut">Zu wenig Trades</div>${t(p.unknown)}</div>`;}).join('')||'<div class="empty">Noch keine geschlossenen Trades.</div>';
+}
+
+function showCell(s,c){
+ const M=REPORT.matrix,dim=M.dim;
+ const rows=REPORT.trades.filter(t=>t.status==='CLOSED'&&(!s||t.strategy===s)&&(!c||String(t[dim]??'UNBEKANNT')===c));
+ $('cellTitle').textContent=`${s||'Alle Strategien'} · ${c?M.dim_label+': '+(dim==='hour_zh'?c+':00':lab(c)):'alle'} · ${rows.length} Trades`;
+ $('cellWrap').style.display=rows.length?'block':'none';
+ $('cellRows').innerHTML=rows.map(t=>`<tr><td>${dt(t.signal_time)}</td><td>${MK[t.market]}</td><td>${esc(t.strategy)}</td><td>${esc(t.side)}</td><td>${esc(lab(t.regime))}</td><td>${t.hold_min==null?'—':Math.round(t.hold_min)+' min'}</td><td class="${cls(t.r)}">${r2(t.r)}R</td><td class="${cls(t.pnl)}">${usd(t.pnl)} USD</td><td>${esc(VD[t.verdict]||'—')}</td></tr>`).join('');
+ $('cellTitle').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+(async()=>{
+ const dims=await Promise.resolve({regime:'Marktlage',vol:'Volatilität',session:'Session',side_vs_trend:'Richtung vs. Trend',hour_zh:'Stunde (CH-Zeit)',weekday:'Wochentag'});
+ $('dim').innerHTML=Object.entries(dims).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
+ ['dim','mkt','minN'].forEach(i=>$(i).onchange=()=>{loadReport();loadMarket();});
+ await Promise.all([loadReport(),loadMarket()]);
+ setInterval(loadMarket,60000);setInterval(loadReport,120000);
+})();
+</script></body></html>

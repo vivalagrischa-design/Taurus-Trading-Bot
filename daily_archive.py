@@ -31,6 +31,7 @@ def daily_snapshot(day):
         lab_signals=rows('signal_log','signal_time>=? AND signal_time<?',(start,end))
         scans=rows('strategy_scans','bar_time>=? AND bar_time<?',(start,end))
         candles=rows('market_candles','bar_time>=? AND bar_time<?',(start,end))
+        trade_path=rows('trade_path','bar_time>=? AND bar_time<?',(start,end))
         progress=[dict(x) for x in db.execute('SELECT * FROM progress').fetchall()]
     return {'schema_version':1,'day_swiss':day,'day_start_utc':datetime.fromtimestamp(start,timezone.utc).isoformat(),
             'day_end_utc':datetime.fromtimestamp(end,timezone.utc).isoformat(),
@@ -43,6 +44,6 @@ def daily_snapshot(day):
             'lab':{'run_id':TEST_VERSION,'risk_usd':RISK,'trades':trades,'signal_events':lab_signals},
             'lucid':{'run_id':VERSION,'selected_strategies':list(SELECTED),
                      'account_snapshot_at_export':account,'orders':lucid_orders},
-            'strategy_scans':scans,'market_candles':candles,'lab_progress':progress,
+            'strategy_scans':scans,'market_candles':candles,'trade_path':trade_path,'lab_progress':progress,
             'counts':{'lab_trades':len(trades),'lab_signals':len(lab_signals),'lucid_orders':len(lucid_orders),
-                      'strategy_scans':len(scans),'candles':len(candles)}}
+                      'strategy_scans':len(scans),'candles':len(candles),'trade_path':len(trade_path)}}

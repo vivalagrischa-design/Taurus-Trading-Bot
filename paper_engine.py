@@ -102,6 +102,7 @@ def init_extra(db):
             known={r['name'] for r in db.execute('PRAGMA table_info(signal_log)').fetchall()}
             if name not in known:db.execute('ALTER TABLE signal_log ADD COLUMN '+name+' '+sqltype)
     db.execute('CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy,market,signal_time)')
+    db.execute('CREATE TABLE IF NOT EXISTS trade_path(trade_id TEXT,bar_time BIGINT,minutes_since_entry INTEGER,r_close DOUBLE PRECISION,r_fav DOUBLE PRECISION,r_adv DOUBLE PRECISION,PRIMARY KEY(trade_id,bar_time))')
     db.execute('''CREATE TABLE IF NOT EXISTS strategy_scans(system TEXT,run_id TEXT,market TEXT,strategy TEXT,timeframe TEXT,bar_time BIGINT,state TEXT,details TEXT,checks TEXT,current_signals INTEGER,context TEXT,PRIMARY KEY(system,run_id,market,strategy,timeframe,bar_time))''')
     db.execute('CREATE INDEX IF NOT EXISTS idx_strategy_scans_lookup ON strategy_scans(system,market,strategy,bar_time)')
     db.execute('''CREATE TABLE IF NOT EXISTS market_candles(system TEXT,run_id TEXT,market TEXT,timeframe TEXT,bar_time BIGINT,open DOUBLE PRECISION,high DOUBLE PRECISION,low DOUBLE PRECISION,close DOUBLE PRECISION,volume DOUBLE PRECISION,source TEXT,PRIMARY KEY(system,run_id,market,timeframe,bar_time))''')
@@ -283,6 +284,25 @@ def _estimated_net_at_stop(trade,stop,market):
     return round(gross-fees,4)
 
 
+def _log_path(db,t,bar,suffix):
+    """Unrealisierter Verlauf je Kerze in R (fuer die Analyse 'wann raus?').
+    Rein additiv und fehlertolerant: darf den Handelsmotor nie beeintraechtigen."""
+    try:
+        stop0=t['initial_stop'] if t['initial_stop'] is not None else t['signal_stop']
+        entry=float(t['entry']);risk=abs(entry-float(stop0))
+        if risk<=0 or t['entry_time'] is None:return
+        d=1 if t['side']=='LONG' else -1
+        minutes=int((int(bar['time'])-int(t['entry_time']))//60)
+        r_close=(float(bar['close'])-entry)*d/risk
+        r_fav=((float(bar['high']) if d==1 else float(bar['low']))-entry)*d/risk
+        r_adv=((float(bar['low']) if d==1 else float(bar['high']))-entry)*d/risk
+        row=(t['id'],int(bar['time']),minutes,round(r_close,4),round(r_fav,4),round(r_adv,4))
+    except Exception:
+        return
+    db.execute('CREATE TABLE IF NOT EXISTS trade_path(trade_id TEXT,bar_time BIGINT,minutes_since_entry INTEGER,r_close DOUBLE PRECISION,r_fav DOUBLE PRECISION,r_adv DOUBLE PRECISION,PRIMARY KEY(trade_id,bar_time))')
+    db.execute('INSERT INTO trade_path(trade_id,bar_time,minutes_since_entry,r_close,r_fav,r_adv) VALUES(?,?,?,?,?,?) ON CONFLICT(trade_id,bar_time) DO NOTHING',row)
+
+
 def _close_open(db,market,bar,suffix,history=None):
     strategies=_engine_strategies(suffix)
     marks=','.join('?' for _ in strategies)
@@ -298,6 +318,7 @@ def _close_open(db,market,bar,suffix,history=None):
         mfe=max(float(t['mfe_usd'] or 0),favorable*float(t['qty'])*multiplier-fee_est)
         mae=min(float(t['mae_usd'] or 0),-adverse*float(t['qty'])*multiplier-fee_est)
         db.execute('UPDATE trades SET mfe_usd=?,mae_usd=? WHERE id=?',(round(mfe,4),round(mae,4),t['id']))
+        _log_path(db,t,bar,suffix)
         stop_hit=(bar['low']<=stop if side=='LONG' else bar['high']>=stop)
         tp_hit=(bar['high']>=tp if side=='LONG' else bar['low']<=tp)
         # TP is an actual exit. If both SL and TP are touched within one OHLC

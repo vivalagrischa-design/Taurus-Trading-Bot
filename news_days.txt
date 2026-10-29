@@ -1,0 +1,2 @@
+# Newstage (CPI, FOMC, NFP, Zinsentscheide) - ein Datum pro Zeile, Format YYYY-MM-DD.
+# Diese Liste pflegst du selbst; sie wird nur als Flag mitgespeichert.

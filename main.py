@@ -47,6 +47,8 @@ async def lifespan(app):
 
 app=FastAPI(title='Taurus Trading Lab',version='1.2.0',lifespan=lifespan)
 app.mount('/static',StaticFiles(directory='static'),name='static')
+from analysis_api import router as analysis_router
+app.include_router(analysis_router)
 DATA={'mode':'DEMO','candles':demo_candles()}
 
 
