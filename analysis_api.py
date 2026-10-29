@@ -51,3 +51,17 @@ def analysis_report(dim: str = 'regime', market: str = 'all', min_n: int = 10):
     except Exception as exc:
         logging.exception('Analysis report failed')
         raise HTTPException(503, 'Auswertung nicht verfügbar') from exc
+
+
+@router.get('/api/analysis/chart')
+def analysis_chart(market: str = 'nq', bars: int = 576):
+    from paper_engine import MARKETS
+    if market not in MARKETS:
+        raise HTTPException(400, 'Unbekannter Markt')
+    if not 50 <= bars <= 2000:
+        raise HTTPException(400, 'bars muss zwischen 50 und 2000 liegen')
+    try:
+        return _cached(('chart', market, bars), lambda: analysis.chart_data(market, bars))
+    except Exception as exc:
+        logging.exception('Analysis chart failed')
+        raise HTTPException(503, 'Chart nicht verfügbar') from exc

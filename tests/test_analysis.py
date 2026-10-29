@@ -94,3 +94,14 @@ class ApiTests(AnalysisTests):
         self.assertEqual(c.get('/api/analysis/report?market=zzz').status_code,400)
         self.assertEqual(c.get('/api/analysis/market').status_code,200)
 if __name__=='__main__':unittest.main()
+
+class ChartTests(AnalysisTests):
+    def test_chart_data(self):
+        d=analysis.chart_data('nq',300)
+        self.assertEqual(len(d['bars']),300);b=d['bars'][-1]
+        self.assertIn(b['r'],rg.REGIMES);self.assertIsNotNone(b['v'])
+        from fastapi import FastAPI;from fastapi.testclient import TestClient
+        import analysis_api;analysis_api._CACHE.clear()
+        app=FastAPI();app.include_router(analysis_api.router);c=TestClient(app)
+        self.assertEqual(c.get('/api/analysis/chart?market=nq&bars=100').status_code,200)
+        self.assertEqual(c.get('/api/analysis/chart?market=x').status_code,400)

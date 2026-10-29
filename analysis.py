@@ -394,6 +394,25 @@ def market_overview(min_n=10):
     return {'generated_at': int(time.time()), 'markets': out, 'min_n': min_n}
 
 
+def chart_data(market, bars=576):
+    """Seite 1: Kursverlauf mit Marktlage je Kerze (Standard: 576 x 5M = 2 Tage)."""
+    from paper_engine import conn, _LOCK, MARKETS
+    if market not in MARKETS:
+        raise ValueError('Unbekannter Markt')
+    with _LOCK:
+        with conn() as db:
+            ser = series_for(db, market)
+    out = []
+    for f in ser['series'][-bars:]:
+        if not f:
+            continue
+        cls = rg.classify(f)
+        a, d = f.get('atr'), f.get('dist_vwap_atr')
+        vwap = round(f['close'] - d * a, 2) if (d is not None and a) else None
+        out.append({'t': f['time'], 'c': f['close'], 'v': vwap, 'r': cls['regime'], 'adx': f['adx']})
+    return {'market': market, 'bars': out}
+
+
 if __name__ == '__main__':          # python analysis.py  -> schnelle Textausgabe
     rep = report()
     mx = rep['matrix']
