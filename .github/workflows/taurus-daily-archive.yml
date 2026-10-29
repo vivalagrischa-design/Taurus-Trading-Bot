@@ -58,9 +58,9 @@ jobs:
             git rm -rf . || true
           fi
           YEAR="${DAY:0:4}"
-          mkdir -p "archives/$YEAR"
-          cp /tmp/taurus-day.json.gz "archives/$YEAR/$DAY.json.gz"
-          git add "archives/$YEAR/$DAY.json.gz"
+          mkdir -p "scans/$YEAR"
+          cp /tmp/taurus-day.json.gz "scans/$YEAR/$DAY.json.gz"
+          git add "scans/$YEAR/$DAY.json.gz"
           if git diff --cached --quiet; then
             echo "Archive for $DAY already current."
           else
