@@ -254,4 +254,6 @@ def evaluate(bars, bars1m=None, market='nq'):
     result.extend(_simple_repetitive(bars,market))
     from trend_pullback_mtf import build as trend_mtf_build
     result.append(trend_mtf_build(bars))
+    from market_map_strategy import build as market_map_build
+    result.extend(market_map_build(bars))
     return result
