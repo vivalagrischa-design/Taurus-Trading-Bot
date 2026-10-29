@@ -73,7 +73,7 @@ async function load(){const system=$('system').value;$('status').textContent='La
  '<div class="chartbox"><h3>Kumuliertes Netto-P/L</h3><p>Geschlossene Trades zeitlich sortiert, Gebühren und Slippage gemäß jeweiligem Paper-Ledger.</p><canvas class="lazy equity" data-kind="equity" id="'+c2+'"></canvas></div>'+
  '<div class="twocol"><div><h3>Entry-Phase</h3>'+tablePhases({entry:true,data:entries})+'</div><div><h3>Exit-Phase</h3>'+tablePhases({entry:false,data:exits})+'</div></div>'+
  '<details class="diagnostic"><summary>Einzelne Trades ('+all.length+')</summary>'+tradeTable(all)+'</details>'+
- (ev.length?'<details class="diagnostic"><summary>Signalprotokoll / übersprungene Signale ('+ev.length+')</summary>'+eventTable(ev)+'</details>':'')+
+ (events.length?'<details class="diagnostic"><summary>Signalprotokoll / übersprungene Signale ('+events.length+')</summary>'+eventTable(events)+'</details>':'')+
  '<details class="diagnostic"><summary>Warum gab es Signale oder keine Trades?</summary><div>'+diagnose+'</div></details>'+
  '<details class="diagnostic"><summary>US-Session beim Entry</summary>'+sessionTable(sessions)+'</details>';
  cards.append(card);
