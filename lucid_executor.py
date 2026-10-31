@@ -3,7 +3,7 @@
 Processes only newly observed completed 5m candles; signals enter on the
 following bar open. Intrabar SL wins ties. A single process is required.
 """
-import math,threading,time,json
+import math,os,threading,time,json
 from datetime import datetime,timezone
 from zoneinfo import ZoneInfo
 from paper_engine import conn,FUTURES,FUTURES_TICK,FUTURES_SLIP_TICKS,_trade_context,_record_scans,_save_market_candles,STRATEGY_SOURCE_HASH

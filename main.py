@@ -38,6 +38,10 @@ def paper_loop():
 
 @asynccontextmanager
 async def lifespan(app):
+    # PostgreSQL only: restore the archived SQLite-era experiment once, before
+    # the paper loop or any request can initialise a fresh experiment.
+    from archive_import import run as import_archives
+    logging.warning('TAURUS archive import: %s',import_archives())
     thread=threading.Thread(target=paper_loop,daemon=True,name='taurus-paper-only')
     thread.start()
     yield
