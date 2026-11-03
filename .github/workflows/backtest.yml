@@ -1,0 +1,65 @@
+name: TAURUS Backtest (60 Tage Yahoo)
+on:
+  push:
+    branches: [feature/backtest-sim]
+    paths: ['backtest.py', 'sim.py', 'strategies.py', 'reversal.py', 'engine.py', 'omar_v2.py',
+            'omar_volume_retest.py', 'bb_rsi.py', 'rosi_strategy.py', 'trend_pullback_mtf.py',
+            'paper_engine.py', 'regime.py', 'tests/test_backtest.py', '.github/workflows/backtest.yml']
+  workflow_dispatch:
+    inputs:
+      days_5m:
+        description: 'Tage 5M-Daten (max. 60)'
+        default: '60'
+      days_1m:
+        description: 'Tage 1M-Daten (max. 29, 0 = aus)'
+        default: '29'
+permissions:
+  contents: write
+concurrency:
+  group: taurus-backtest
+  cancel-in-progress: true
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tests
+        run: python -m unittest -v tests.test_backtest tests.test_paper_execution
+      - name: Backtest mit Yahoo-Daten
+        env:
+          DAYS5: ${{ inputs.days_5m || '60' }}
+          DAYS1: ${{ inputs.days_1m || '29' }}
+        run: |
+          pip install 'yfinance>=0.2.65,<2'
+          python backtest.py --source yahoo --days-5m "$DAYS5" --days-1m "$DAYS1" --out backtest_out
+          cat backtest_out/backtest.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taurus-backtest
+          path: backtest_out/
+          retention-days: 30
+      - name: Bericht auf Branch taurus-backtests ablegen
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u +%Y-%m-%d_%H%M)"
+          cp -r backtest_out /tmp/bt
+          git config user.name 'taurus-backtest-bot'
+          git config user.email 'taurus-backtest-bot@users.noreply.github.com'
+          git fetch origin taurus-backtests || true
+          if git rev-parse --verify -q origin/taurus-backtests >/dev/null; then
+            git checkout -B taurus-backtests origin/taurus-backtests
+          else
+            git checkout --orphan taurus-backtests
+            git rm -rf -q . || true
+          fi
+          mkdir -p "runs/$STAMP"
+          cp /tmp/bt/backtest.md "runs/$STAMP/backtest.md"
+          gzip -9 -c /tmp/bt/backtest.json > "runs/$STAMP/backtest.json.gz"
+          cp /tmp/bt/backtest.md latest.md
+          git add runs latest.md
+          git commit -q -m "Backtest $STAMP"
+          git push origin HEAD:taurus-backtests
