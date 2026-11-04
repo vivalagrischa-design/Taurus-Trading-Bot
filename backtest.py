@@ -486,11 +486,15 @@ def main(argv=None):
     ap.add_argument('--zero-volume', choices=('frozen', 'all', 'none'), default='frozen',
                     help='frozen: nur eingefrorene Kerzen (Vol 0, Hoch=Tief) entfernen; all: jede Vol-0-Kerze; none')
     ap.add_argument('--cache', help='Kerzen-Datei (.json.gz): laden falls vorhanden, sonst nach dem Download speichern')
+    ap.add_argument('--only', help='nur diese Strategien handeln (Komma-Liste), z.B. crt_reclaim_mid,crt_retest_full')
     ap.add_argument('--no-gate', action='store_true', help='Marktlagen-Filter aus (zeigt alle Marktlagen)')
     ap.add_argument('--out', default='backtest_out')
     a = ap.parse_args(argv)
     if a.no_gate:
         os.environ['TAURUS_REGIME_GATE'] = 'off'
+    if a.only:
+        only = tuple(x.strip() for x in a.only.split(',') if x.strip())
+        pe.ACTIVE_5M, pe.ACTIVE_1M, pe.ACTIVE_EXTREMES = only, (), ()
     markets = [m.strip() for m in a.markets.split(',') if m.strip() in pe.FUTURES]
     live_trades = []
     if a.source == 'archive':

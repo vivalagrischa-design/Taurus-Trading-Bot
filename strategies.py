@@ -256,6 +256,8 @@ def evaluate(bars, bars1m=None, market='nq'):
     result.append(trend_mtf_build(bars))
     from regime_strategies import build as regime_build
     result.extend(regime_build(bars,market))
+    from crt import build as crt_build
+    result.extend(crt_build(bars,market))
     # V8: Signale nur in den Marktlagen, in denen die Strategie einen Vorteil hat.
     from regime_gate import apply as regime_gate
     return regime_gate(result,bars)

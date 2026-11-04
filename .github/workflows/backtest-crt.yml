@@ -1,0 +1,46 @@
+name: TAURUS CRT-Test (60 Tage Yahoo)
+on:
+  push:
+    branches: [feature/crt-test]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: taurus-backtest-crt
+  cancel-in-progress: true
+jobs:
+  crt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tests
+        run: python -m unittest -v tests.test_v8 tests.test_backtest
+      - name: CRT-Backtest
+        run: |
+          pip install 'yfinance>=0.2.65,<2'
+          S=crt_reclaim_mid,crt_reclaim_full,crt_retest_mid,crt_retest_full
+          python backtest.py --source yahoo --days-1m 0 --cache candles.json.gz --only "$S" --out out/crt
+          TAURUS_MAX_COST_SHARE=1.0 python backtest.py --source yahoo --cache candles.json.gz --only "$S" --audit-samples 0 --out out/crt_nocost
+          cat out/crt/backtest.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Bericht auf Branch taurus-backtests
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u +%Y-%m-%d_%H%M)_crt"
+          cp -r out /tmp/out
+          git config user.name 'taurus-backtest-bot'
+          git config user.email 'taurus-backtest-bot@users.noreply.github.com'
+          git fetch origin taurus-backtests
+          git checkout -B taurus-backtests origin/taurus-backtests
+          mkdir -p "runs/$STAMP"
+          for n in crt crt_nocost; do
+            cp "/tmp/out/$n/backtest.md" "runs/$STAMP/$n.md"
+            gzip -9 -c "/tmp/out/$n/backtest.json" > "runs/$STAMP/$n.json.gz"
+          done
+          cp /tmp/out/crt/backtest.md latest_crt.md
+          git add runs latest_crt.md
+          git commit -q -m "CRT-Test $STAMP"
+          git push origin HEAD:taurus-backtests

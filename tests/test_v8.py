@@ -102,3 +102,17 @@ class CandleStudy(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CRT(unittest.TestCase):
+    def test_causal_and_valid(self):
+        import crt
+        bars = demo_candles(600)
+        full = {(t['id'], s['time'], s['side']) for t in crt.build(bars) for s in t['signals']}
+        for cut in (300, 450, 599):
+            pre = {(t['id'], s['time'], s['side']) for t in crt.build(bars[:cut + 1]) for s in t['signals']}
+            self.assertEqual({x for x in full if x[1] <= bars[cut]['time']}, pre)
+        for t in crt.build(bars):
+            for s in t['signals']:
+                ok = s['stop'] < s['entry'] < s['tp'] if s['side'] == 'LONG' else s['tp'] < s['entry'] < s['stop']
+                self.assertTrue(ok, s)
