@@ -20,6 +20,12 @@ Grundidee (Literatur + eigener Backtest):
 
 Die Parameter stammen aus der Literatur bzw. sind runde Standardwerte und
 wurden NICHT auf unsere 60 Tage optimiert.
+
+Ergebnis 60-Tage-Backtest (26.8.-4.11.2026, nach Kosten):
+  aktiv:   trend_breakout_1h (nur TREND_HOCH, +0.12 R, beide Haelften positiv),
+           orb5 (+0.10 R, n=71, nur LAB), trend_engulf_fade (aus der Kerzen-Studie, nur LAB)
+  inaktiv: range_bb_reentry (-0.19 R), range_rsi2 (-0.11 R), trend_ema_pullback (-0.04 R),
+           imom_last30 (-0.12 R, Haelften widerspruechlich). Code bleibt fuer Nachtests.
 """
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -37,6 +43,7 @@ NAMES = {
     'range_rsi2': 'Range: RSI(2) Extrem',
     'orb5': 'ORB 5 Minuten (9:30)',
     'imom_last30': 'Intraday-Momentum letzte 30 Min.',
+    'trend_engulf_fade': 'Abwärtstrend: Bullish Engulfing shorten',
 }
 KEYS = tuple(NAMES)
 
@@ -148,6 +155,15 @@ def build(bars, market='nq'):
                     stop = c[i] + 1.2 * atr
                     emit('range_rsi2', i, _sig('range_rsi2', 'SHORT', b, c[i], stop, c[i] - (stop - c[i]),
                                                'Seitwärts, RSI(2) > 95; Stop 1.2 ATR; 1R'))
+
+        # ---- Kerzen-Studie: Bullish Engulfing IM Abwaertstrend -> Short (Gegenbewegung verkaufen).
+        # Einziges Muster, das in der 60-Tage-Studie netto positiv, in beiden Haelften
+        # positiv und besser als die Basisrate war (58 % zuerst -1 ATR). Stop = Ziel = 1 ATR.
+        if reg == 'TREND_RUNTER':
+            po, pc = o[i - 1], c[i - 1]
+            if pc < po and c[i] > o[i] and o[i] <= pc and c[i] >= po and (c[i] - o[i]) > (po - pc):
+                emit('trend_engulf_fade', i, _sig('trend_engulf_fade', 'SHORT', b, c[i], c[i] + atr, c[i] - atr,
+                                                  'Abwärtstrend + Bullish Engulfing (Kerzen-Studie); Stop/Ziel 1 ATR'))
 
         # ---- Uhrzeit-Effekte, nur US-Indexfutures
         if market in INDEX_MARKETS:

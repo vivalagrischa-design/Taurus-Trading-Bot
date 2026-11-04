@@ -22,7 +22,10 @@ class LucidOneMinuteTests(unittest.TestCase):
             t=seq[-1]['time']
             signals=[dict(time=t,side='SHORT',stop=101.,tp=98.)] if t==target else []
             return [dict(id='bb_only_short',signals=signals)]
-        with patch('bb_rsi.build',side_effect=fake_build):
+        # V8: Lucid hat standardmaessig keine 1M-Strategie; die Mechanik wird mit einer Test-Auswahl geprueft.
+        with patch('bb_rsi.build',side_effect=fake_build), \
+             patch.object(lucid_executor,'SELECTED',('bb_only_short',)), \
+             patch.object(lucid_executor,'SELECTED_1M',('bb_only_short',)):
             first=lucid_executor.advance('nq',bars,'1m')
             self.assertIn('first observation',first['reason'])
             lucid_executor.advance('nq',self.bars(322),'1m')

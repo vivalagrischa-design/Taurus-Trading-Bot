@@ -18,15 +18,16 @@ import regime as rg
 # (25.8.-3.11.2026, n >= 40) einen positiven Durchschnitt hatten.
 # Neue V8-Strategien: Marktlage per Konstruktion (siehe regime_strategies.py).
 GATES = {
-    'omar': {'TREND_RUNTER'},
-    'ema20': {'TREND_RUNTER'},
-    'trend_pullback_mtf': {'TREND_RUNTER'},
-    'bb_only_long': {'TREND_RUNTER'},
-    'trend_ema_pullback': {'TREND_HOCH', 'TREND_RUNTER'},
-    'trend_breakout_1h': {'TREND_HOCH', 'TREND_RUNTER'},
-    'range_bb_reentry': {'RANGE'},
-    'range_rsi2': {'RANGE'},
-    # orb5 und imom_last30: Uhrzeit-Effekte, bewusst ohne Marktlagen-Filter
+    'omar': {'TREND_RUNTER'},                 # 60 Tage: +0.12 R, beide Haelften positiv
+    'ema20': {'TREND_RUNTER'},                # +0.08 R, beide Haelften positiv
+    'trend_pullback_mtf': {'TREND_RUNTER'},   # inaktiv (+0.02 R = kein Vorteil)
+    'bb_only_long': {'TREND_RUNTER'},         # nur LAB, 1M-Daten erst 29 Tage
+    'trend_breakout_1h': {'TREND_HOCH'},      # TREND_HOCH +0.12 R stabil, TREND_RUNTER -0.08 R
+    'trend_engulf_fade': {'TREND_RUNTER'},
+    'trend_ema_pullback': {'TREND_HOCH', 'TREND_RUNTER'},   # inaktiv
+    'range_bb_reentry': {'RANGE'},            # inaktiv
+    'range_rsi2': {'RANGE'},                  # inaktiv
+    # orb5: Uhrzeit-Effekt, bewusst ohne Marktlagen-Filter
 }
 
 

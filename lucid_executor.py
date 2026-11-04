@@ -11,9 +11,12 @@ from strategies import evaluate
 
 LOCK=threading.RLock()
 NY=ZoneInfo('America/New_York')
-VERSION='lucid_independent_25k_v1'
+VERSION='lucid_independent_25k_v2_regime'
 START=25000.
-SELECTED=('rev_engulfing','rev_bounce','trend_pullback','bb_only_short')
+# V8: nur Strategien mit stabilem Vorteil in ihrer Marktlage und n >= 200 im 60-Tage-Backtest
+# (Marktlagen-Filter greift ueber strategies.evaluate). Neues Konto ab 25'000.
+SELECTED=('omar','ema20','trend_breakout_1h')
+SELECTED_1M=()   # 1M-Strecke ohne 5M-Kerzen -> kein Marktlagen-Filter moeglich, daher leer
 MAX_QTY=20
 RISK=200.
 DAY_STOP=400.
@@ -51,6 +54,9 @@ def setup(db):
             db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS '+col+' TEXT')
         elif col not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
             db.execute('ALTER TABLE lucid_orders ADD COLUMN '+col+' TEXT')
+    if isinstance(db,PgConnection):db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS time_exit BIGINT')
+    elif 'time_exit' not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
+        db.execute('ALTER TABLE lucid_orders ADD COLUMN time_exit BIGINT')
     if isinstance(db,PgConnection):db.execute('ALTER TABLE lucid_orders ADD COLUMN IF NOT EXISTS signal_reason TEXT')
     elif 'signal_reason' not in {r['name'] for r in db.execute('PRAGMA table_info(lucid_orders)')}:
         db.execute('ALTER TABLE lucid_orders ADD COLUMN signal_reason TEXT')
@@ -84,9 +90,11 @@ def _close(db,trade,bar,history=None,timeframe='5m'):
     mfe=max(float(trade['mfe_usd'] or 0),favorable*mult*qty)
     mae=min(float(trade['mae_usd'] or 0),-adverse*mult*qty)
     db.execute('UPDATE lucid_orders SET mfe_usd=?,mae_usd=? WHERE id=?',(mfe,mae,trade['id']))
-    hit_sl=float(bar['low'])<=stop if side=='LONG' else float(bar['high'])>=stop
-    hit_tp=float(bar['high'])>=tp if side=='LONG' else float(bar['low'])<=tp
-    if not (hit_sl or hit_tp):
+    time_exit=trade['time_exit'] if 'time_exit' in trade.keys() else None
+    timed=bool(time_exit and int(bar['time'])>=int(time_exit))
+    hit_sl=(not timed) and (float(bar['low'])<=stop if side=='LONG' else float(bar['high'])>=stop)
+    hit_tp=(not timed) and (float(bar['high'])>=tp if side=='LONG' else float(bar['low'])<=tp)
+    if not (hit_sl or hit_tp or timed):
         initial_value=trade['initial_stop']
         initial_stop=float(initial_value if initial_value is not None else stop)
         initial_r=abs(float(trade['entry'])-initial_stop)
@@ -96,14 +104,14 @@ def _close(db,trade,bar,history=None,timeframe='5m'):
             stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
             db.execute('UPDATE lucid_orders SET stop=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',(stop,trade['id']))
         return
-    raw=(min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))) if hit_sl else tp
+    raw=float(bar['open']) if timed else (min(stop,float(bar['open'])) if side=='LONG' else max(stop,float(bar['open']))) if hit_sl else tp
     px=_slip(raw,side,False,market)
     mult,fee=FUTURES[market]
     gross=(px-float(trade['entry']))*(1 if side=='LONG' else -1)*mult*int(trade['qty'])
     fees=fee*int(trade['qty']);pnl=round(gross-fees,4)
     exit_context=json.dumps(_trade_context(history or [bar],int(bar['time']),timeframe),separators=(',',':'))
     db.execute("UPDATE lucid_orders SET status='CLOSED',exit_time=?,exit_price=?,pnl=?,exit_reason=?,exit_context=?,exit_reference=?,exit_slippage_usd=?,gross_pnl=?,fees_paid=? WHERE id=?",
-               (bar['time'],px,pnl,'SL' if hit_sl else 'TP',exit_context,raw,abs(px-raw)*int(trade['qty'])*mult,gross,fees,trade['id']))
+               (bar['time'],px,pnl,'TIME' if timed else 'SL' if hit_sl else 'TP',exit_context,raw,abs(px-raw)*int(trade['qty'])*mult,gross,fees,trade['id']))
     db.execute('UPDATE lucid_account SET balance=balance+? WHERE version=?',(pnl,VERSION))
     a=db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone()
     if float(a['balance'])<=float(a['floor']) or float(a['session_start'])-float(a['balance'])>=DAY_STOP:
@@ -157,7 +165,9 @@ def advance(market,bars,interval='5m'):
                 active=db.execute("SELECT * FROM lucid_orders WHERE market=? AND timeframe=? AND status='OPEN' AND entry_time<=?",(market,interval,bar['time'])).fetchall()
                 for trade in active:_close(db,trade,bar,bars[:i+1],interval)
                 # Only signals generated from data available at this completed bar.
-                if i>=(75 if interval=='5m' else 320):
+                if interval=='1m' and not SELECTED_1M:
+                    pass
+                elif i>=(75 if interval=='5m' else 320):
                     if interval=='5m':
                         tiles=evaluate(bars[:i+1],market=market)
                     else:
@@ -165,17 +175,17 @@ def advance(market,bars,interval='5m'):
                         tiles=bb_build(bars[max(0,i-450):i+1])
                     for tile in tiles:
                         if tile['id'] not in SELECTED:continue
-                        if interval=='5m' and tile['id']=='bb_only_short':continue
-                        if interval=='1m' and tile['id']!='bb_only_short':continue
+                        if interval=='5m' and tile['id'] in SELECTED_1M:continue
+                        if interval=='1m' and tile['id'] not in SELECTED_1M:continue
                         for sig in tile.get('signals',[]):
                             if int(sig['time'])!=int(bar['time']):continue
                             side=sig['side'];stop=float(sig['stop']);tp=float(sig['tp'])
                             if side not in ('LONG','SHORT'):continue
                             ident=f"{VERSION}:{market}:{tile['id']}:{int(bar['time'])}:{side}"
-                            db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty,timeframe,signal_context,strategy_version,signal_entry,signal_stop,signal_tp,signal_reason)
-                               VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING""",
-                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-(240 if interval=='1m' else 48)):i+1],int(bar['time']),interval),separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH),float(sig.get('entry',bar['close'])),stop,tp,str(sig.get('reason',''))))
-                    scan_allowed=tuple(x for x in SELECTED if not (interval=='5m' and x=='bb_only_short')) if interval=='5m' else ('bb_only_short',)
+                            db.execute("""INSERT INTO lucid_orders(id,market,strategy,side,signal_time,stop,tp,status,qty,timeframe,signal_context,strategy_version,signal_entry,signal_stop,signal_tp,signal_reason,time_exit)
+                               VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING""",
+                               (ident,market,tile['id'],side,int(bar['time']),stop,tp,interval,json.dumps(_trade_context(bars[max(0,i-(240 if interval=='1m' else 48)):i+1],int(bar['time']),interval),separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH),float(sig.get('entry',bar['close'])),stop,tp,str(sig.get('reason','')),sig.get('time_exit')))
+                    scan_allowed=tuple(x for x in SELECTED if x not in SELECTED_1M) if interval=='5m' else tuple(SELECTED_1M)
                     _record_scans(db,'lucid',VERSION,market,tiles,bar,interval,bars[:i+1],scan_allowed)
                 db.execute('UPDATE lucid_account SET '+col+'=? WHERE version=?',(int(bar['time']),VERSION))
                 a=db.execute('SELECT * FROM lucid_account WHERE version=?',(VERSION,)).fetchone()

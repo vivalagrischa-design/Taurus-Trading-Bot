@@ -65,3 +65,15 @@ Forschungswerkzeuge, die nichts am Live-LAB ändern und nie auf die Live-Datenba
   - `lucid`: Wahrscheinlichkeit, das Lucid-25K-Ziel vor dem Max Loss zu erreichen
   - `path`: „Time Machine“ – Rest eines Trades 10'000-mal aus Kerzen derselben Tageszeit und Marktlage
 - GitHub Action `TAURUS Backtest (60 Tage Yahoo)` läuft bei jedem Push auf den Branch und manuell; der Bericht landet im Run-Summary und auf dem Branch `taurus-backtests` (`latest.md`).
+
+
+## V8 – Strategien je Marktlage (Branch feature/v8-regime)
+
+- Neues Experiment `taurus_v8_regime_20261104`, neues Lucid-Konto `lucid_independent_25k_v2_regime`.
+- Aktiv im LAB: `omar` und `ema20` (nur TREND_RUNTER), `trend_breakout_1h` (nur TREND_HOCH), `orb5`, `trend_engulf_fade` (nur TREND_RUNTER), `bb_only_long` (1M, nur TREND_RUNTER).
+- Lucid: `omar`, `ema20`, `trend_breakout_1h` – je nur in ihrer Marktlage.
+- Marktlagen-Filter: `regime_gate.py` (abschaltbar mit `TAURUS_REGIME_GATE=off`).
+- Kostenregel: Kommission + Slippage > 10 % des Risikos → `COST_TOO_HIGH` (`TAURUS_MAX_COST_SHARE`).
+- Eingefrorene Yahoo-Kerzen (Volumen 0 und Hoch = Tief) werden entfernt (`feed_quality.py`).
+- `candle_study.py`: misst Kerzenmuster × Marktlage gegen die Basisrate.
+- Workflow `TAURUS V8 Backtest + Kerzen-Studie` rechnet alles auf 60 Tagen neu; Berichte auf Branch `taurus-backtests` (`latest_v8.md`, `latest_candles.md`).

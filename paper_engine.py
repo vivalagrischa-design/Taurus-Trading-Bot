@@ -23,7 +23,9 @@ MARKETS=tuple(FUTURES)
 # bb_reversal_*, bb_rsi_*, rsi_ema, omar_v2/omar_volume_retest, bb_rsi_scale).
 # Verbleibende bestehende Strategien laufen nur in ihrer Marktlage (regime_gate.py),
 # dazu die neuen Strategien je Marktlage aus regime_strategies.py.
-ACTIVE_5M=('omar','ema20','trend_pullback_mtf','trend_ema_pullback','trend_breakout_1h','range_bb_reentry','range_rsi2','orb5','imom_last30')
+# 60-Tage-Backtest V8: nur Strategien, die in ihrer Marktlage in BEIDEN Zeithaelften positiv waren.
+# Getestet und wieder entfernt: trend_pullback_mtf, trend_ema_pullback, range_bb_reentry, range_rsi2, imom_last30.
+ACTIVE_5M=('omar','ema20','trend_breakout_1h','orb5','trend_engulf_fade')
 ACTIVE_1M=()
 ACTIVE_EXTREMES=('bb_only_long',)
 # Maximaler Kostenanteil (Kommission + 2 Ticks Slippage) am geplanten Risiko je Kontrakt.
