@@ -64,8 +64,8 @@ class ExecutionRules(unittest.TestCase):
 
     def test_one_position_per_strategy(self):
         bars = [bar(i * 300, 100, 100.5, 99.5, 100) for i in range(100)]
-        sigs = [dict(strategy='ema20', engine='5m', side='LONG', time=80 * 300, entry=100, stop=95, tp=110),
-                dict(strategy='ema20', engine='5m', side='LONG', time=81 * 300, entry=100, stop=95, tp=110)]
+        sigs = [dict(strategy='ema20', engine='5m', side='LONG', time=80 * 300, entry=100, stop=80, tp=140),
+                dict(strategy='ema20', engine='5m', side='LONG', time=81 * 300, entry=100, stop=80, tp=140)]
         trades = bt.execute('nq', bars, sigs, '5m')
         self.assertEqual(len(trades), 1)
 

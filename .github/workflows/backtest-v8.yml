@@ -1,0 +1,84 @@
+name: TAURUS V8 Backtest + Kerzen-Studie (60 Tage Yahoo)
+on:
+  push:
+    branches: [feature/v8-regime]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: taurus-backtest-v8
+  cancel-in-progress: true
+jobs:
+  v8:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tests
+        run: |
+          python -m unittest -v tests.test_backtest tests.test_v8 tests.test_paper_execution
+          python -m unittest -v test_lab_lucid_separation test_lucid_25k_sim test_v7_session_policy
+      - name: Kerzen laden (60 Tage 5M, 29 Tage 1M)
+        run: |
+          pip install 'yfinance>=0.2.65,<2'
+          python - <<'PY'
+          import backtest as bt
+          c={}
+          for m in ('nq','mes','mgc'):
+              c[(m,'5m')]=bt.load_yahoo(m,'5m',60); c[(m,'1m')]=bt.load_yahoo(m,'1m',29)
+              print(m,len(c[(m,'5m')]),len(c[(m,'1m')]))
+          bt.save_candles('candles.json.gz',c)
+          PY
+      - name: V8 mit Marktlagen-Filter (Standard)
+        run: python backtest.py --source yahoo --cache candles.json.gz --out out/v8
+      - name: V8 ohne Marktlagen-Filter (alle Marktlagen sichtbar)
+        run: python backtest.py --source yahoo --cache candles.json.gz --no-gate --audit-samples 0 --out out/v8_nogate
+      - name: Volumen-0-Vergleich (alle Vol-0-Kerzen raus / nichts raus)
+        run: |
+          python backtest.py --source yahoo --cache candles.json.gz --zero-volume all --audit-samples 0 --out out/v8_zero_all
+          python backtest.py --source yahoo --cache candles.json.gz --zero-volume none --audit-samples 0 --out out/v8_zero_none
+      - name: Ohne Kostenregel
+        env:
+          TAURUS_MAX_COST_SHARE: '1.0'
+        run: python backtest.py --source yahoo --cache candles.json.gz --audit-samples 0 --out out/v8_nocost
+      - name: Kerzen-Studie
+        run: python candle_study.py --source cache --cache candles.json.gz --out out/candles
+      - name: Zusammenfassung
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          for name in ('v8','v8_nogate','v8_zero_all','v8_zero_none','v8_nocost'):
+              d=json.load(open(f'out/{name}/backtest.json'))
+              s=d['summary']; print(f"- **{name}**: {s['closed']} Trades, {s['sum_usd']:,.0f} USD")
+          PY
+          cat out/v8/backtest.md out/candles/candles.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taurus-v8
+          path: out/
+          retention-days: 30
+      - name: Berichte auf Branch taurus-backtests
+        run: |
+          set -euo pipefail
+          STAMP="$(date -u +%Y-%m-%d_%H%M)_v8"
+          cp -r out /tmp/out
+          git config user.name 'taurus-backtest-bot'
+          git config user.email 'taurus-backtest-bot@users.noreply.github.com'
+          git fetch origin taurus-backtests
+          git checkout -B taurus-backtests origin/taurus-backtests
+          mkdir -p "runs/$STAMP"
+          for d in /tmp/out/*; do
+            n=$(basename "$d")
+            [ -f "$d/backtest.md" ] && cp "$d/backtest.md" "runs/$STAMP/$n.md"
+            [ -f "$d/backtest.json" ] && gzip -9 -c "$d/backtest.json" > "runs/$STAMP/$n.json.gz"
+          done
+          cp /tmp/out/candles/candles.md "runs/$STAMP/candles.md"
+          cp /tmp/out/candles/candles.json "runs/$STAMP/candles.json"
+          cp /tmp/out/v8/backtest.md latest_v8.md
+          cp /tmp/out/candles/candles.md latest_candles.md
+          git add runs latest_v8.md latest_candles.md
+          git commit -q -m "V8 Backtest $STAMP"
+          git push origin HEAD:taurus-backtests

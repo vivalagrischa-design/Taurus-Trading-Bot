@@ -37,6 +37,8 @@ def _fetch(period, interval, cache, min_refresh, symbol='NQ=F'):
                     continue
                 items.append({'time':t,'open':op,'high':hi,'low':lo,'close':cl,'volume':float(r['Volume']) if r['Volume']==r['Volume'] else 0})
             items.sort(key=lambda x:x['time'])
+            from feed_quality import clean
+            items=clean(items)   # eingefrorene Kerzen (Volumen 0 und Hoch == Tief) entfernen
             if len(items)<75:
                 raise RuntimeError(f'Nur {len(items)} vollständige Kerzen verfügbar')
             cache.update(candles=items[-2000:],last_success=int(now),error=None)

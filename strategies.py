@@ -254,4 +254,8 @@ def evaluate(bars, bars1m=None, market='nq'):
     result.extend(_simple_repetitive(bars,market))
     from trend_pullback_mtf import build as trend_mtf_build
     result.append(trend_mtf_build(bars))
-    return result
+    from regime_strategies import build as regime_build
+    result.extend(regime_build(bars,market))
+    # V8: Signale nur in den Marktlagen, in denen die Strategie einen Vorteil hat.
+    from regime_gate import apply as regime_gate
+    return regime_gate(result,bars)

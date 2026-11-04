@@ -70,6 +70,21 @@ def _clean(rows):
     return [out[t] for t in sorted(out)]
 
 
+def save_candles(path, candles):
+    with gzip.open(path, 'wt') as f:
+        json.dump({f'{m}|{tf}': v for (m, tf), v in candles.items()}, f)
+
+
+def load_candles(path):
+    with gzip.open(path, 'rt') as f:
+        return {tuple(k.split('|')): v for k, v in json.load(f).items()}
+
+
+def apply_quality(candles, mode):
+    from feed_quality import clean
+    return {k: clean(v, mode) for k, v in candles.items()}
+
+
 def load_archive(paths):
     """Kerzen und LAB-Trades aus den taeglichen JSON-Archiven (.json oder .json.gz)."""
     candles, trades = defaultdict(list), {}
@@ -140,7 +155,11 @@ def _engine_signals(engine, market, bars5m, bars1m):
         else:
             last = chunk[-1]['time'] + 60
             done5 = bars5m[:bisect.bisect_right(times5, last - 300)]   # nur abgeschlossene 5M-Kerzen
-            tiles = evaluate(done5[-WINDOW['5m']:], bars1m=chunk, market=market) if engine == '1m' else bb_build(chunk)
+            if engine == '1m':
+                tiles = evaluate(done5[-WINDOW['5m']:], bars1m=chunk, market=market)
+            else:
+                from regime_gate import apply as regime_gate
+                tiles = regime_gate(bb_build(chunk), done5[-WINDOW['5m']:])
         for st in tiles:
             if st['id'] not in active:
                 continue
@@ -156,9 +175,10 @@ def _engine_signals(engine, market, bars5m, bars1m):
 def generate_signals(market, bars5m, bars1m):
     sigs = _engine_signals('5m', market, bars5m, bars1m)
     if bars1m:
-        if market == 'nq':                                  # Opening-Strategien laufen live nur fuer NQ
+        if market == 'nq' and pe.ACTIVE_1M:                 # Opening-Strategien laufen live nur fuer NQ
             sigs += _engine_signals('1m', market, bars5m, bars1m)
-        sigs += _engine_signals('extremes', market, bars5m, bars1m)
+        if pe.ACTIVE_EXTREMES:
+            sigs += _engine_signals('extremes', market, bars5m, bars1m)
     return sigs
 
 
@@ -205,6 +225,8 @@ def _open(trade, bar, market):
     dist = entry - stop if side == 'LONG' else stop - entry
     if dist <= 0 or (side == 'LONG' and entry >= tp) or (side == 'SHORT' and entry <= tp):
         return 'GAP_INVALID'
+    if pe.cost_share(entry, stop, market) > pe.MAX_COST_SHARE:
+        return 'COST_TOO_HIGH'
     if trade['strategy'] == 'bb_rsi_scale' and market in pe.FUTURES:
         return 'CRYPTO_RESEARCH_ONLY'
     mult, comm = pe.FUTURES[market]
@@ -224,6 +246,15 @@ def _manage(trade, bar, market):
     """Eine Kerze fuer einen offenen Trade. True = geschlossen."""
     side, stop, tp, entry = trade['side'], trade['stop'], trade['tp'], trade['entry']
     d = 1 if side == 'LONG' else -1
+    mult, comm = pe.FUTURES[market]
+    if trade.get('time_exit') and bar['time'] >= trade['time_exit']:
+        raw = float(bar['open'])
+        exit_price = pe._slipped(raw, side, False, market)
+        gross = (exit_price - entry) * trade['qty'] * d * mult
+        fees = trade['qty'] * comm
+        trade.update(status='CLOSED', exit_time=int(bar['time']), exit=exit_price, exit_reason='TIME',
+                     gross_pnl=gross, fees_paid=fees, pnl=gross - fees)
+        return True
     r0 = abs(entry - trade['signal_stop']) or 1e-12
     fav = (bar['high'] - entry) if d == 1 else (entry - bar['low'])
     adv = (entry - bar['low']) if d == 1 else (bar['high'] - entry)
@@ -244,7 +275,6 @@ def _manage(trade, bar, market):
         reason = 'SL' if trade['trail_updates'] == 0 else 'TRAIL'
     else:
         raw, reason = tp, 'TP'
-    mult, comm = pe.FUTURES[market]
     exit_price = pe._slipped(raw, side, False, market)
     gross = (exit_price - entry) * trade['qty'] * d * mult
     fees = trade['qty'] * comm
@@ -281,7 +311,7 @@ def execute(market, bars, signals, engine):
                 'id': f"{market}:{s['strategy']}:{int(s['time'])}:{s['side']}", 'market': market,
                 'strategy': s['strategy'], 'engine': engine, 'side': s['side'], 'signal_time': int(s['time']),
                 'signal_entry': float(s['entry']), 'signal_stop': float(s['stop']), 'signal_tp': float(s['tp']),
-                'status': 'PENDING', 'phase': ctx.get('phase'), 'ny_session': ctx.get('ny_session'),
+                'status': 'PENDING', 'time_exit': s.get('time_exit'), 'phase': ctx.get('phase'), 'ny_session': ctx.get('ny_session'),
                 'reason': str(s.get('reason', ''))}
     return done + list(active.values())
 
@@ -326,12 +356,19 @@ def summarize(trades, min_n=20):
                                  max(1, sum(1 for t in rows if t['pnl'] <= 0)))
         s['fees_usd'] = sum(t['fees_paid'] for t in rows)
         return s
+    if closed:
+        ts = sorted(t['signal_time'] for t in closed)
+        mid = ts[len(ts) // 2]
+        for t in closed:
+            t['half'] = 'A' if t['signal_time'] < mid else 'B'
     out = {
         'closed': len(closed), 'sum_usd': sum(t['pnl'] for t in closed),
         'cancelled': dict(sorted(_count(t['exit_reason'] for t in trades if t['status'] == 'CANCELLED').items())),
         'by_strategy': {k[0]: stat(v) for k, v in grouped('strategy').items()},
         'by_strategy_regime': {f'{k[0]}|{k[1]}': stat(v) for k, v in grouped('strategy', 'regime').items()},
         'by_strategy_side_vs_trend': {f'{k[0]}|{k[1]}': stat(v) for k, v in grouped('strategy', 'side_vs_trend').items()},
+        'by_strategy_half': {f'{k[0]}|{k[1]}': stat(v) for k, v in grouped('strategy', 'half').items()},
+        'by_strategy_regime_half': {f'{k[0]}|{k[1]}|{k[2]}': stat(v) for k, v in grouped('strategy', 'regime', 'half').items()},
         'by_strategy_session': {f'{k[0]}|{k[1]}': stat(v) for k, v in grouped('strategy', 'session').items()},
         'by_market': {k[0]: stat(v) for k, v in grouped('market').items()},
     }
@@ -339,7 +376,10 @@ def summarize(trades, min_n=20):
     for key, s in out['by_strategy_regime'].items():
         strat, reg = key.split('|')
         if s['n'] >= min_n and s['verdict'] in ('GRUEN', 'TENDENZ_PLUS'):
-            playbook[reg].append({'strategy': strat, 'n': s['n'], 'avg_r': s['avg_r'], 'verdict': s['verdict']})
+            a = out['by_strategy_regime_half'].get(f'{strat}|{reg}|A', {}).get('avg_r')
+            b = out['by_strategy_regime_half'].get(f'{strat}|{reg}|B', {}).get('avg_r')
+            playbook[reg].append({'strategy': strat, 'n': s['n'], 'avg_r': s['avg_r'], 'verdict': s['verdict'],
+                                  'avg_r_A': a, 'avg_r_B': b, 'stable': bool(a is not None and b is not None and a > 0 and b > 0)})
     out['playbook'] = {r: sorted(v, key=lambda x: -x['avg_r']) for r, v in playbook.items()}
     return _round(out)
 
@@ -357,22 +397,32 @@ def markdown(summary, meta, audit):
                 f"{(s['ci_low'] or 0):+.2f} … {(s['ci_high'] or 0):+.2f} | {s['sum_usd']:,.0f} | {s['verdict']} |")
     lines = ['# TAURUS Backtest', '',
              f"Daten: {meta['source']} · {meta['from']} bis {meta['to']} · Märkte: {', '.join(meta['markets'])}",
+             f"Marktlagen-Filter: {'an' if meta.get('regime_gate', True) else 'AUS'} · Volumen-0-Kerzen: {meta.get('zero_volume_mode', '?')} "
+             f"(entfernt: {meta.get('removed_candles', {})}) · max. Kostenanteil: {meta.get('max_cost_share', '?')}",
              f"Geschlossene Trades: {summary['closed']} · Summe: {summary['sum_usd']:,.0f} USD (200 USD Risiko je Trade, je Strategie getrennt)",
              '', 'R = Ergebnis / geplantes Risiko. KI = 95%-Konfidenzintervall des Durchschnitts-R. '
              'GRUEN/ROT nur wenn das ganze KI über/unter 0 liegt. Unter 20 Trades: ZU_WENIG.', '',
              '## Strategien gesamt', '', '| Strategie | n | Treffer | Ø R | KI | USD | Urteil |', '|---|---|---|---|---|---|---|']
     for k, s in sorted(summary['by_strategy'].items(), key=lambda kv: kv[1]['avg_r']):
         lines.append(f'| {k} ' + fmt(s))
+    lines += ['', '## Stabilität: erste vs. zweite Hälfte des Zeitraums', '',
+              '| Strategie | Ø R Hälfte A | n A | Ø R Hälfte B | n B |', '|---|---|---|---|---|']
+    for k in sorted(summary['by_strategy']):
+        a = summary['by_strategy_half'].get(f'{k}|A'); b = summary['by_strategy_half'].get(f'{k}|B')
+        if a or b:
+            lines.append(f"| {k} | {(a or {}).get('avg_r', 0):+.2f} | {(a or {}).get('n', 0)} | {(b or {}).get('avg_r', 0):+.2f} | {(b or {}).get('n', 0)} |")
     lines += ['', '## Strategie × Marktlage (n ≥ 10)', '', '| Strategie | Marktlage | n | Treffer | Ø R | KI | USD | Urteil |',
               '|---|---|---|---|---|---|---|---|']
     for k, s in sorted(summary['by_strategy_regime'].items()):
         if s['n'] >= 10:
             a, b = k.split('|')
             lines.append(f'| {a} | {b} ' + fmt(s))
-    lines += ['', '## Playbook: positive Strategien je Marktlage (n ≥ 20)', '']
+    lines += ['', '## Playbook: positive Strategien je Marktlage (n ≥ 20; stabil = in beiden Hälften positiv)', '']
     if summary['playbook']:
         for reg, items in sorted(summary['playbook'].items()):
-            lines.append(f"- **{reg}**: " + ', '.join(f"{x['strategy']} ({x['avg_r']:+.2f} R, n={x['n']}, {x['verdict']})" for x in items))
+            lines.append(f"- **{reg}**: " + ', '.join(
+                f"{x['strategy']} ({x['avg_r']:+.2f} R, n={x['n']}, {x['verdict']}, A {x['avg_r_A'] or 0:+.2f} / B {x['avg_r_B'] or 0:+.2f}"
+                f"{', stabil' if x['stable'] else ', NICHT stabil'})" for x in items))
     else:
         lines.append('- Keine Strategie erreicht in einer Marktlage n ≥ 20 mit positivem Ø R.')
     if audit:
@@ -433,19 +483,33 @@ def main(argv=None):
     ap.add_argument('--min-n', type=int, default=20)
     ap.add_argument('--audit-samples', type=int, default=40)
     ap.add_argument('--compare-live', action='store_true', help='nur mit --source archive')
+    ap.add_argument('--zero-volume', choices=('frozen', 'all', 'none'), default='frozen',
+                    help='frozen: nur eingefrorene Kerzen (Vol 0, Hoch=Tief) entfernen; all: jede Vol-0-Kerze; none')
+    ap.add_argument('--cache', help='Kerzen-Datei (.json.gz): laden falls vorhanden, sonst nach dem Download speichern')
+    ap.add_argument('--no-gate', action='store_true', help='Marktlagen-Filter aus (zeigt alle Marktlagen)')
     ap.add_argument('--out', default='backtest_out')
     a = ap.parse_args(argv)
+    if a.no_gate:
+        os.environ['TAURUS_REGIME_GATE'] = 'off'
     markets = [m.strip() for m in a.markets.split(',') if m.strip() in pe.FUTURES]
     live_trades = []
     if a.source == 'archive':
         paths = [p for p in glob.glob(os.path.join(a.archive_dir, '**', '*.json*'), recursive=True)
                  if os.path.basename(p)[:4].isdigit()]
         candles, live_trades = load_archive(paths)
+    elif a.cache and os.path.exists(a.cache):
+        candles = load_candles(a.cache)
     else:
         candles = {}
         for m in markets:
             candles[(m, '5m')] = load_yahoo(m, '5m', a.days_5m)
             candles[(m, '1m')] = load_yahoo(m, '1m', a.days_1m) if a.days_1m > 0 else []
+        if a.cache:
+            save_candles(a.cache, candles)
+    before = {k: len(v) for k, v in candles.items()}
+    candles = apply_quality(candles, a.zero_volume)
+    removed = {f'{k[0]}_{k[1]}': before[k] - len(v) for k, v in candles.items()}
+    print('Entfernte Kerzen (' + a.zero_volume + '):', removed)
     try:
         from analysis import load_news_days
         news = load_news_days()
@@ -456,7 +520,9 @@ def main(argv=None):
     meta = {'source': a.source, 'markets': markets, 'generated_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'from': datetime.fromtimestamp(min(all5), NY).strftime('%Y-%m-%d') if all5 else None,
             'to': datetime.fromtimestamp(max(all5), NY).strftime('%Y-%m-%d') if all5 else None,
-            'strategy_source_hash': pe.STRATEGY_SOURCE_HASH, 'risk_usd': pe.RISK}
+            'strategy_source_hash': pe.STRATEGY_SOURCE_HASH, 'risk_usd': pe.RISK,
+            'zero_volume_mode': a.zero_volume, 'removed_candles': removed, 'regime_gate': not a.no_gate,
+            'max_cost_share': pe.MAX_COST_SHARE, 'active': {'5m': pe.ACTIVE_5M, '1m': pe.ACTIVE_1M, 'extremes': pe.ACTIVE_EXTREMES}}
     summary = summarize(trades, a.min_n)
     os.makedirs(a.out, exist_ok=True)
     doc = {'meta': meta, 'summary': summary, 'audit': audit, 'trades': _round(trades)}

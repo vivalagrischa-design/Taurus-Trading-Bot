@@ -28,11 +28,14 @@ class LabVsLucidTest(unittest.TestCase):
                 db.execute("""INSERT INTO trades
                     (id,market,strategy,side,signal_time,signal_stop,signal_tp,status,timeframe)
                     VALUES(?,?,?,?,?,?,?,'PENDING','5m')""",
-                    (f'lab-{n}','mgc','rev_engulfing','LONG',stamp-300,100.,105.))
+                    (f'lab-{n}','mgc','omar','LONG',stamp-300,100.,105.))
             bars=[{'time':stamp-300+i*300,'open':100.,'high':100.3,
                    'low':99.9,'close':100.2,'volume':100} for i in range(20)]
             bars[-1]['time']=stamp
-            p._open_pending(db,'mgc',bars[-1],bars,'5m')
+            # Kostenregel hier ausschalten: der Test prueft nur, dass das LAB kein 20-Micro-Limit hat.
+            from unittest.mock import patch
+            with patch.object(p,'MAX_COST_SHARE',10.0):
+                p._open_pending(db,'mgc',bars[-1],bars,'5m')
             trades=db.execute("SELECT qty,risk_plan,status FROM trades WHERE id LIKE 'lab-%'").fetchall()
             self.assertEqual(len(trades),2)
             self.assertTrue(all(x['status']=='OPEN' for x in trades),trades)

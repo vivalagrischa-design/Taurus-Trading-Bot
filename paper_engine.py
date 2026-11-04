@@ -18,12 +18,20 @@ FUTURES={'nq':(2.0,1.0),'mes':(5.0,1.0),'mgc':(10.0,1.60)}
 FUTURES_TICK={'nq':0.25,'mes':0.25,'mgc':0.10}
 FUTURES_SLIP_TICKS=float(os.environ.get('TAURUS_FUTURES_SLIP_TICKS','1'))  # multiplier, Lucid per-contract round-trip commission
 MARKETS=tuple(FUTURES)
-ACTIVE_5M=('omar','omar_v2_volume_retest','rsi_ema','ema20','orb','rev_exhaustion','rev_engulfing','rev_pinbar','rev_bounce','rev_exhaustion_confirmed','rev_engulfing_confirmed','rev_pinbar_confirmed','rev_bounce_confirmed','trend_pullback','trend_pullback_mtf','bb_rsi_scale','rosi_frankfurt','rosi_london','rosi_new_york')
-ACTIVE_1M=('opening_drop','opening_reversal')
-ACTIVE_EXTREMES=('bb_only_short','bb_only_long','bb_rsi_short','bb_rsi_long','bb_reversal_short','bb_reversal_long')
+# V8 (2026-11-04): Strategien ohne Vorteil im 60-Tage-Backtest entfernt
+# (rev_* alle 8, rosi_*, trend_pullback, orb (30 Min.), opening_*, bb_*_short,
+# bb_reversal_*, bb_rsi_*, rsi_ema, omar_v2/omar_volume_retest, bb_rsi_scale).
+# Verbleibende bestehende Strategien laufen nur in ihrer Marktlage (regime_gate.py),
+# dazu die neuen Strategien je Marktlage aus regime_strategies.py.
+ACTIVE_5M=('omar','ema20','trend_pullback_mtf','trend_ema_pullback','trend_breakout_1h','range_bb_reentry','range_rsi2','orb5','imom_last30')
+ACTIVE_1M=()
+ACTIVE_EXTREMES=('bb_only_long',)
+# Maximaler Kostenanteil (Kommission + 2 Ticks Slippage) am geplanten Risiko je Kontrakt.
+# Zu enge Stops machen die Kosten zum groessten Verlustposten.
+MAX_COST_SHARE=float(os.environ.get('TAURUS_MAX_COST_SHARE','0.10'))
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
-TEST_VERSION='taurus_v7_zero_start_20261026'
-_RULE_FILES=('strategies.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','setup_quality.py','engine.py')
+TEST_VERSION='taurus_v8_regime_20261104'
+_RULE_FILES=('strategies.py','regime_strategies.py','regime_gate.py','feed_quality.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','setup_quality.py','engine.py')
 def _ruleset_hash():
     h=hashlib.sha256()
     for name in _RULE_FILES:
@@ -88,7 +96,7 @@ def init_extra(db):
           'bb_position':'TEXT','bb_percent_b':'DOUBLE PRECISION',
           'entry_rsi':'DOUBLE PRECISION','entry_bar_time':'BIGINT',
           'initial_stop':'DOUBLE PRECISION','trail_updates':'INTEGER',
-          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','signal_context':'TEXT','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION'}
+          'stop_net_estimate':'DOUBLE PRECISION','break_even_stop':'DOUBLE PRECISION','scale_legs':'INTEGER','scale_pending':'INTEGER','last_leg_price':'DOUBLE PRECISION','signal_context':'TEXT','entry_context':'TEXT','exit_context':'TEXT','strategy_version':'TEXT','signal_reason':'TEXT','entry_reference':'DOUBLE PRECISION','exit_reference':'DOUBLE PRECISION','entry_slippage_usd':'DOUBLE PRECISION','exit_slippage_usd':'DOUBLE PRECISION','gross_pnl':'DOUBLE PRECISION','fees_paid':'DOUBLE PRECISION','time_exit':'BIGINT'}
     for name,sqltype in cols.items():
         if isinstance(db,PgConnection):
             db.execute('ALTER TABLE trades ADD COLUMN IF NOT EXISTS '+name+' '+sqltype)
@@ -154,7 +162,8 @@ def _signals_for_last_1m(market,bars1m,bars5m):
 
 def _signals_for_last_extremes(market,bars1m,bars5m):
     from bb_rsi import build
-    tiles=build(bars1m)
+    from regime_gate import apply as regime_gate
+    tiles=regime_gate(build(bars1m),bars5m)
     return [(st['id'],sig) for st in tiles if st['id'] in ACTIVE_EXTREMES for sig in st['signals'] if sig['time']==bars1m[-1]['time']],tiles
 
 
@@ -231,6 +240,8 @@ def _open_pending(db,market,bar,history,suffix):
         dist=(entry-stop if side=='LONG' else stop-entry)
         if dist<=0 or (side=='LONG' and entry>=tp) or (side=='SHORT' and entry<=tp):
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='GAP_INVALID' WHERE id=?",(t['id'],)); continue
+        if market in FUTURES and cost_share(entry,stop,market)>MAX_COST_SHARE:
+            db.execute("UPDATE trades SET status='CANCELLED',exit_reason='COST_TOO_HIGH' WHERE id=?",(t['id'],)); continue
         if t['strategy']=='bb_rsi_scale' and market in FUTURES:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='CRYPTO_RESEARCH_ONLY' WHERE id=?",(t['id'],));continue
         if market in FUTURES:
@@ -261,6 +272,15 @@ def _open_pending(db,market,bar,history,suffix):
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
                     _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
                     _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time']),'1m' if suffix in ('1m','extremes') else '5m'),separators=(',',':')),float(bar['open']),entry_slippage,t['id']))
+
+
+def cost_share(entry,stop,market):
+    """Anteil von Kommission + Ein-/Ausstiegs-Slippage am Risiko je Kontrakt."""
+    if market not in FUTURES:return 0.0
+    multiplier,commission=FUTURES[market]
+    cost=commission+2*FUTURES_TICK[market]*FUTURES_SLIP_TICKS*multiplier
+    rpu=abs(entry-stop)*multiplier+commission+FUTURES_TICK[market]*FUTURES_SLIP_TICKS*multiplier
+    return cost/max(rpu,1e-9)
 
 
 def _net_break_even_stop(entry,side,market):
@@ -319,6 +339,15 @@ def _close_open(db,market,bar,suffix,history=None):
         mae=min(float(t['mae_usd'] or 0),-adverse*float(t['qty'])*multiplier-fee_est)
         db.execute('UPDATE trades SET mfe_usd=?,mae_usd=? WHERE id=?',(round(mfe,4),round(mae,4),t['id']))
         _log_path(db,t,bar,suffix)
+        time_exit=t['time_exit'] if 'time_exit' in t.keys() else None
+        if time_exit and int(bar['time'])>=int(time_exit):
+            # Zeit-Ausstieg zum Open der Kerze ab time_exit (z.B. 16:00 New York).
+            raw=float(bar['open']);exit_price=_slipped(raw,side,False,market)
+            gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*multiplier
+            fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
+            db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason='TIME',exit_reference=?,exit_slippage_usd=?,gross_pnl=?,fees_paid=? WHERE id=?",
+                       (bar['time'],exit_price,round(gross-fees,4),raw,abs(exit_price-raw)*float(t['qty'])*multiplier,gross,fees,t['id']))
+            continue
         stop_hit=(bar['low']<=stop if side=='LONG' else bar['high']>=stop)
         tp_hit=(bar['high']>=tp if side=='LONG' else bar['low']<=tp)
         # TP is an actual exit. If both SL and TP are touched within one OHLC
@@ -418,6 +447,8 @@ def _record_scans(db,system,run_id,market,tiles,bar,timeframe,bars,allowed_strat
 def _advance_generic(market,bars,signal_lookup,suffix='5m'):
     if market not in MARKETS or not bars:
         return {'processed':0,'reason':'unsupported/no data'}
+    if not _engine_strategies(suffix):
+        return {'processed':0,'reason':'no active strategies for this engine'}
     bars=sorted(bars,key=lambda b:b['time']); last=int(bars[-1]['time']); step=60 if suffix in ('1m','extremes') else 300
     key=_progress_key(market,suffix)
     with _LOCK:
@@ -460,9 +491,9 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                         record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note,signal_context)
                         continue
                     record_signal(db,trade_id,market,strategy,sig,'PENDING','NEXT_BAR_OPEN '+score_note,signal_context)
-                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version,signal_reason)
-                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?,?)''',
-                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH),str(sig.get('reason',''))))
+                    db.execute('''INSERT OR IGNORE INTO trades(id,market,strategy,side,signal_time,status,signal_entry,signal_stop,signal_tp,timeframe,signal_context,strategy_version,signal_reason,time_exit)
+                                  VALUES(?,?,?,?,?,'PENDING',?,?,?,?,?,?,?,?)''',
+                               (trade_id,market,strategy,sig['side'],int(sig['time']),float(sig['entry']),float(sig['stop']),float(sig['tp']),sig.get('timeframe','5m'),json.dumps(signal_context,separators=(',',':')),str(sig.get('version') or STRATEGY_SOURCE_HASH),str(sig.get('reason','')),sig.get('time_exit')))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(int(b['time']),key))
                 count+=1
             return {'processed':count,'reason':'updated'}
