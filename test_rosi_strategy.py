@@ -64,7 +64,7 @@ class RosiLabTests(unittest.TestCase):
         self.assertEqual(len(build(bars[:ix+2],'nq')[0]['signals']),1)
 
     def test_lucid_winners_only(self):
-        self.assertEqual(set(SELECTED),{'rev_engulfing','rev_bounce','trend_pullback','bb_only_short'})
+        self.assertEqual(set(SELECTED),{'omar','ema20','trend_breakout_1h'})  # V8-Auswahl
         self.assertFalse(any(s.startswith('rosi') for s in SELECTED))
 
 if __name__=='__main__':unittest.main()
