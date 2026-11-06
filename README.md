@@ -77,3 +77,13 @@ Forschungswerkzeuge, die nichts am Live-LAB ändern und nie auf die Live-Datenba
 - Eingefrorene Yahoo-Kerzen (Volumen 0 und Hoch = Tief) werden entfernt (`feed_quality.py`).
 - `candle_study.py`: misst Kerzenmuster × Marktlage gegen die Basisrate.
 - Workflow `TAURUS V8 Backtest + Kerzen-Studie` rechnet alles auf 60 Tagen neu; Berichte auf Branch `taurus-backtests` (`latest_v8.md`, `latest_candles.md`).
+
+
+## PO3 10:00 – Forward-Test (Branch feature/po3-10am)
+
+- Neue Strategie `po3_10am` (`po3_10am.py`): ICT „Power of 3“ um die 4H-Kerze 10:00 New York, aus der PO3-Checkliste in feste Regeln übersetzt.
+- Regeln: Volatilität (Index-ATR14 im Rang ≥ 33 % der letzten 250 Tage) · Bias (Vortag 09:30–16:00 und 4H 06–10 gleichgerichtet) · HTF-Level (Vortagesextrem oder 4H-FVG getappt) · enge Accumulation 09:30–10:00 (≤ 0,35 × ATR) · Manipulation ab 10:00 (Sweep oder 5M-FVG-Tap) · Entry bis 12:00 per 1M-IFVG, sonst BOS · Stop hinter dem Manipulations-Extrem, **Ziel 3R ohne Trailing**, Ausstieg 15:55.
+- Backtest SPY 1M 2010–2026 (Variante 3R + Volatilitätsfilter): n=519, +0,12 R je Trade nach Kosten, 95 %-KI −0,02…+0,29 R. Die Variante wurde nach Sicht auf alle Jahre gewählt → **der Forward-Test ist die eigentliche Prüfung, Regeln nicht nachoptimieren.**
+- Märkte: MNQ und MES. Nur LAB (eigene 1M-Engine `advance_po3`, Fortschrittsschlüssel `nq:po3`/`mes:po3`), nicht im Lucid-Konto.
+- Tagesdaten für den Volatilitätsfilter: Yahoo `^NDX` / `^GSPC` (2 Jahre, alle 6 h). Ohne Tagesdaten gibt die Strategie keine Signale.
+- Auswertung nach ca. 6 Monaten bzw. ≥ 15 Trades gegen die Backtest-Erwartung von +0,12 R.

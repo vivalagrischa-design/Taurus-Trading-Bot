@@ -28,10 +28,15 @@ MARKETS=tuple(FUTURES)
 ACTIVE_5M=('omar','ema20','trend_breakout_1h','orb5','trend_engulf_fade')
 ACTIVE_1M=()
 ACTIVE_EXTREMES=('bb_only_long',)
+# PO3 10:00 (po3_10am.py): eigene 1M-Engine, nur LAB, Forward-Test ab 2026-11-06.
+ACTIVE_PO3=('po3_10am',)
+ONE_MIN=('1m','extremes','po3')
+# Strategien mit festem Ziel ohne Trailing-Stop (so getestet).
+NO_TRAIL=('bb_rsi_scale','rev_bounce','po3_10am')
 # Maximaler Kostenanteil (Kommission + 2 Ticks Slippage) am geplanten Risiko je Kontrakt.
 # Zu enge Stops machen die Kosten zum groessten Verlustposten.
 MAX_COST_SHARE=float(os.environ.get('TAURUS_MAX_COST_SHARE','0.10'))
-ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
+ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES+ACTIVE_PO3
 TEST_VERSION='taurus_v8_regime_20261104'
 _RULE_FILES=('strategies.py','regime_strategies.py','regime_gate.py','feed_quality.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','setup_quality.py','engine.py')
 def _ruleset_hash():
@@ -169,6 +174,12 @@ def _signals_for_last_extremes(market,bars1m,bars5m):
     return [(st['id'],sig) for st in tiles if st['id'] in ACTIVE_EXTREMES for sig in st['signals'] if sig['time']==bars1m[-1]['time']],tiles
 
 
+def _signals_for_last_po3(market,bars1m):
+    from po3_10am import build
+    tiles=[build(bars1m,market,last_only=True)]
+    return [(st['id'],sig) for st in tiles if st['id'] in ACTIVE_PO3 for sig in st['signals'] if sig['time']==bars1m[-1]['time']],tiles
+
+
 def _entry_indicators(history):
     """Indicators from completed bars available at the time of entry."""
     if len(history)<20:return ('INSUFFICIENT',None,None)
@@ -189,7 +200,7 @@ def _entry_indicators(history):
 
 
 def _engine_strategies(suffix):
-    return ACTIVE_5M if suffix=='5m' else ACTIVE_1M if suffix=='1m' else ACTIVE_EXTREMES
+    return ACTIVE_5M if suffix=='5m' else ACTIVE_1M if suffix=='1m' else ACTIVE_PO3 if suffix=='po3' else ACTIVE_EXTREMES
 
 
 def _net_target_price(entry,side,target_usd,qty,market):
@@ -273,7 +284,7 @@ def _open_pending(db,market,bar,history,suffix):
         db.execute("UPDATE trades SET status='OPEN',entry_time=?,entry=?,stop=?,tp=?,qty=?,risk_plan=?,cost_estimate=?,bb_position=?,bb_percent_b=?,entry_rsi=?,entry_bar_time=?,initial_stop=?,mfe_usd=0,mae_usd=0,trail_updates=0,stop_net_estimate=?,break_even_stop=?,scale_legs=?,scale_pending=0,last_leg_price=?,entry_context=?,entry_reference=?,entry_slippage_usd=? WHERE id=?",
                    (bar['time'],entry,stop,tp,qty,risk_plan,fees_est,bbpos,pct,rsi,bar['time'],stop,
                     _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},stop,market),
-                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time']),'1m' if suffix in ('1m','extremes') else '5m'),separators=(',',':')),float(bar['open']),entry_slippage,t['id']))
+                    _net_break_even_stop(entry,side,market),1 if t['strategy']=='bb_rsi_scale' else None,entry,json.dumps(_trade_context(history,int(bar['time']),'1m' if suffix in ONE_MIN else '5m'),separators=(',',':')),float(bar['open']),entry_slippage,t['id']))
 
 
 def cost_share(entry,stop,market):
@@ -355,7 +366,7 @@ def _close_open(db,market,bar,suffix,history=None):
         # TP is an actual exit. If both SL and TP are touched within one OHLC
         # candle, conservatively assume SL first (intrabar order unknown).
         # Trailing decisions use the finished candle and take effect next bar.
-        if not (stop_hit or tp_hit) and t['strategy'] not in ('bb_rsi_scale','rev_bounce'):
+        if not (stop_hit or tp_hit) and t['strategy'] not in NO_TRAIL:
             initial_r=abs(float(t['entry'])-float(t['signal_stop']))
             if initial_r>0:
                 direction=1 if side=='LONG' else -1
@@ -384,7 +395,7 @@ def _close_open(db,market,bar,suffix,history=None):
         gross=(exit_price-t['entry'])*t['qty']*(1 if side=='LONG' else -1)*multiplier
         fees=(t['qty']*FUTURES[market][1] if market in FUTURES else (t['entry']+exit_price)*t['qty']*FEE_RATE)
         pnl=gross-fees
-        exit_context=_trade_context(history or [bar],int(bar['time']),'1m' if suffix=='1m' else '5m')
+        exit_context=_trade_context(history or [bar],int(bar['time']),'1m' if suffix in ('1m','po3') else '5m')
         db.execute("UPDATE trades SET status='CLOSED',exit_time=?,exit=?,pnl=?,exit_reason=?,exit_context=?,exit_reference=?,exit_slippage_usd=?,gross_pnl=?,fees_paid=? WHERE id=?",
                    (bar['time'],exit_price,round(pnl,4),reason,json.dumps(exit_context,separators=(',',':')),raw,abs(exit_price-raw)*float(t['qty'])*multiplier,gross,fees,t['id']))
 
@@ -451,20 +462,20 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
         return {'processed':0,'reason':'unsupported/no data'}
     if not _engine_strategies(suffix):
         return {'processed':0,'reason':'no active strategies for this engine'}
-    bars=sorted(bars,key=lambda b:b['time']); last=int(bars[-1]['time']); step=60 if suffix in ('1m','extremes') else 300
+    bars=sorted(bars,key=lambda b:b['time']); last=int(bars[-1]['time']); step=60 if suffix in ONE_MIN else 300
     key=_progress_key(market,suffix)
     with _LOCK:
         with conn() as db:
             row=db.execute('SELECT last_bar FROM progress WHERE market=?',(key,)).fetchone()
             if row is None:
-                _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ('1m','extremes') else '5m',bars)
+                _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ONE_MIN else '5m',bars)
                 db.execute('INSERT INTO progress VALUES (?,?)',(key,last))
                 return {'processed':0,'reason':'first observation; no historical paper fills'}
             last_seen=int(row['last_bar'])
             if last<last_seen: return {'processed':0,'reason':'data older than watermark'}
             pending=[(i,b) for i,b in enumerate(bars) if b['time']>last_seen]
             if not pending: return {'processed':0,'reason':'no new complete candle'}
-            _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ('1m','extremes') else '5m',[b for _,b in pending])
+            _save_market_candles(db,'lab',TEST_VERSION,market,'1m' if suffix in ONE_MIN else '5m',[b for _,b in pending])
             if pending[0][1]['time']>last_seen+step:
                 db.execute("UPDATE trades SET status='UNKNOWN',exit_reason='DATA_GAP' WHERE market=? AND strategy IN ("+','.join('?' for _ in _engine_strategies(suffix))+") AND status IN ('OPEN','PENDING')",(market,*_engine_strategies(suffix)))
                 db.execute('UPDATE progress SET last_bar=? WHERE market=?',(last,key))
@@ -480,14 +491,14 @@ def _advance_generic(market,bars,signal_lookup,suffix='5m'):
                 scan_result=signal_lookup(i)
                 if isinstance(scan_result,tuple):signals,tiles=scan_result
                 else:signals,tiles=scan_result,None
-                _record_scans(db,'lab',TEST_VERSION,market,tiles,b,'1m' if suffix in ('1m','extremes') else '5m',bars[:i+1],_engine_strategies(suffix))
+                _record_scans(db,'lab',TEST_VERSION,market,tiles,b,'1m' if suffix in ONE_MIN else '5m',bars[:i+1],_engine_strategies(suffix))
                 for strategy,sig in signals:
                     if sig['side'] not in ('LONG','SHORT'): continue
                     trade_id=f'{market}:{strategy}:{sig["time"]}:{sig["side"]}'
                     quality=score_signal(sig,bars[:i+1])
                     score_note='QUALITY_'+str(quality['score'])+'_'+quality['grade']
-                    context_bars=bars[max(0,i-(240 if suffix in ('1m','extremes') else 48)):i+1]
-                    signal_context=_trade_context(context_bars,int(sig['time']),'1m' if suffix in ('1m','extremes') else '5m')
+                    context_bars=bars[max(0,i-(240 if suffix in ONE_MIN else 48)):i+1]
+                    signal_context=_trade_context(context_bars,int(sig['time']),'1m' if suffix in ONE_MIN else '5m')
                     exists=db.execute("SELECT 1 FROM trades WHERE market=? AND strategy=? AND status IN ('PENDING','OPEN')",(market,strategy)).fetchone()
                     if exists:
                         record_signal(db,trade_id,market,strategy,sig,'SKIPPED','POSITION_ALREADY_ACTIVE '+score_note,signal_context)
@@ -513,6 +524,13 @@ def advance_opening(market,bars1m,bars5m):
 
 def advance_extremes(market,bars1m,bars5m):
     return _advance_generic(market,bars1m,lambda i:_signals_for_last_extremes(market,bars1m[:i+1],bars5m),'extremes')
+
+
+def advance_po3(market,bars1m):
+    from po3_10am import MARKETS as PO3_MARKETS
+    if market not in PO3_MARKETS or not bars1m:
+        return {'processed':0,'reason':'po3_10am nur fuer nq/mes mit 1M-Daten'}
+    return _advance_generic(market,bars1m,lambda i:_signals_for_last_po3(market,bars1m[:i+1]),'po3')
 
 
 

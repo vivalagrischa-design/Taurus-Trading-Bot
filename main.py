@@ -1,6 +1,6 @@
 import csv,io,threading,logging
 from contextlib import asynccontextmanager
-from paper_engine import advance, advance_opening, advance_extremes, summary
+from paper_engine import advance, advance_opening, advance_extremes, advance_po3, summary
 from fastapi import FastAPI,File,HTTPException,UploadFile,Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +28,13 @@ def paper_loop():
                 if one['candles'] and not one['error']:
                     last_poll[market+'_lucid_1m']=lucid_advance(market,one['candles'],interval='1m')
                     last_poll[market+'_bb']=advance_extremes(market,one['candles'],five['candles'])
+                    try:
+                        import po3_10am
+                        po3_10am.refresh_daily(market)
+                        last_poll[market+'_po3']=advance_po3(market,one['candles'])
+                    except Exception as exc:
+                        logging.exception('PO3 poll failed for %s',market)
+                        last_poll[market+'_po3']={'processed':0,'reason':str(exc)[:180]}
                     if market=='nq':
                         last_poll[market+'_opening']=advance_opening(market,one['candles'],five['candles'])
             except Exception as exc:

@@ -37,8 +37,8 @@ def ensure_tables(db):
 
 
 def _strategy_timeframes():
-    from paper_engine import ACTIVE_1M, ACTIVE_EXTREMES
-    return set(ACTIVE_1M) | set(ACTIVE_EXTREMES)
+    from paper_engine import ACTIVE_1M, ACTIVE_EXTREMES, ACTIVE_PO3
+    return set(ACTIVE_1M) | set(ACTIVE_EXTREMES) | set(ACTIVE_PO3)
 
 
 def load_candles(db, market):
