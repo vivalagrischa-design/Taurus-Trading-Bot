@@ -1,0 +1,62 @@
+name: TAURUS V9 Backtest (1h-Marktlage, 60 Tage Yahoo)
+on:
+  push:
+    branches: [feature/v9-regime-1h]
+  workflow_dispatch:
+concurrency:
+  group: taurus-backtest-v9
+  cancel-in-progress: true
+jobs:
+  v9:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TAURUS_V9_FEED: 'off'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tests
+        run: |
+          pip install -r requirements.txt
+          python -m unittest -v tests.test_v9 tests.test_backtest tests.test_v8 tests.test_paper_execution tests.test_regime_lab
+          python -m unittest -v test_lab_lucid_separation test_lucid_25k_sim test_v7_session_policy
+      - name: Kerzen laden (60 Tage 5M, 29 Tage 1M)
+        run: |
+          pip install 'yfinance>=0.2.65,<2'
+          python - <<'PY'
+          import backtest as bt
+          c={}
+          for m in ('nq','mes','mgc'):
+              c[(m,'5m')]=bt.load_yahoo(m,'5m',60); c[(m,'1m')]=bt.load_yahoo(m,'1m',29)
+              print(m,len(c[(m,'5m')]),len(c[(m,'1m')]))
+          bt.save_candles('candles.json.gz',c)
+          PY
+      - name: Backtest V8 + V9
+        run: python backtest.py --source yahoo --cache candles.json.gz --audit-samples 20 --out out/v9
+      - name: V9-Zusammenfassung
+        run: |
+          python - <<'PY' > summary.md
+          import json
+          from collections import defaultdict
+          d=json.load(open('out/v9/backtest.json'))
+          t=[x for x in d['trades'] if x['strategy'].startswith('v9_')]
+          st=defaultdict(int)
+          for x in t: st[(x['strategy'],x['status'],x.get('exit_reason'))]+=1
+          print('## V9 Status/Ausstieg'); [print('-',k,v) for k,v in sorted(st.items())]
+          print('\n| Strategie | n | Treffer | Ø R | USD |\n|---|---|---|---|---|')
+          g=defaultdict(list)
+          for x in t:
+              if x['status']=='CLOSED' and x.get('r') is not None: g[x['strategy']].append(x)
+          for k in sorted(g):
+              xs=g[k]; print(f"| {k} | {len(xs)} | {sum(x['r']>0 for x in xs)/len(xs):.0%} | {sum(x['r'] for x in xs)/len(xs):+.2f} | {sum(x['pnl'] for x in xs):,.0f} |")
+          print('\nAudit:', json.dumps({m:{k:v for k,v in a.items() if str(k).startswith('v9_')} for m,a in d.get('audit',{}).items()}, default=str)[:1500])
+          PY
+          cat summary.md
+          cat summary.md out/v9/backtest.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taurus-v9
+          path: out/
+          retention-days: 30

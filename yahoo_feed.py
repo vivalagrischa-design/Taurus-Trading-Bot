@@ -8,6 +8,7 @@ _CACHE_1M={'candles':[], 'last_attempt':0., 'last_success':None,'error':'Noch ni
 _LOCK=Lock()
 MIN_REFRESH_SECONDS_5M=300
 MIN_REFRESH_SECONDS_1M=60
+MIN_REFRESH_SECONDS_1H=600
 
 
 FUTURES={'nq':'NQ=F','mes':'ES=F','mgc':'GC=F'}
@@ -25,7 +26,7 @@ def _fetch(period, interval, cache, min_refresh, symbol='NQ=F'):
             if frame.empty:
                 raise RuntimeError('Yahoo liefert aktuell keine Kerzen')
             items=[]
-            step=60 if interval=='1m' else 300
+            step={'1m':60,'5m':300,'1h':3600}[interval]
             for idx,r in frame.iterrows():
                 t=int(idx.to_pydatetime().astimezone(timezone.utc).timestamp())
                 op,hi,lo,cl=(float(r[c]) for c in ('Open','High','Low','Close'))
@@ -60,7 +61,8 @@ def fetch_market(market,interval='5m',force=False):
     Not an exchange-grade micro-futures feed; do not live-execute from it.
     """
     if market not in FUTURES:raise ValueError('Unsupported futures market')
-    if interval not in ('1m','5m'):raise ValueError('Unsupported interval')
+    if interval not in ('1m','5m','1h'):raise ValueError('Unsupported interval')
     cache=_FUTURES_CACHE.setdefault((market,interval),{'candles':[],'last_attempt':0.,'last_success':None,'error':'Noch nicht geladen'})
-    return _fetch('7d' if interval=='1m' else '5d',interval,cache,
-                  0 if force else (MIN_REFRESH_SECONDS_1M if interval=='1m' else MIN_REFRESH_SECONDS_5M),FUTURES[market])
+    period={'1m':'7d','5m':'5d','1h':'60d'}[interval]
+    refresh={'1m':MIN_REFRESH_SECONDS_1M,'5m':MIN_REFRESH_SECONDS_5M,'1h':MIN_REFRESH_SECONDS_1H}[interval]
+    return _fetch(period,interval,cache,0 if force else refresh,FUTURES[market])

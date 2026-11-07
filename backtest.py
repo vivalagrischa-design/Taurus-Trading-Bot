@@ -232,10 +232,13 @@ def _open(trade, bar, market):
     mult, comm = pe.FUTURES[market]
     rpu = abs(entry - stop) * mult + comm + pe.FUTURES_TICK[market] * pe.FUTURES_SLIP_TICKS * mult
     qty = math.floor(pe.RISK / max(rpu, 0.0001))
+    v9 = trade['strategy'] in pe.V9_EXITS
+    if v9 and qty < 1 and rpu <= pe.V9_MAX_RISK:          # wie live: V9 mindestens 1 Kontrakt
+        qty = 1
     if qty > 0 and pe._estimated_net_at_stop({'side': side, 'entry': entry, 'qty': qty}, tp, market) <= 0:
         return 'TP_NOT_PROFITABLE_NET'
     risk_plan = qty * rpu
-    if qty <= 0 or risk_plan > pe.RISK + 1e-5:
+    if qty <= 0 or risk_plan > max(pe.RISK, min(pe.V9_MAX_RISK if v9 else pe.RISK, rpu)) + 1e-5:
         return 'RISK_LIMIT'
     trade.update(status='OPEN', entry_time=int(bar['time']), entry=entry, stop=stop, initial_stop=stop, tp=tp,
                  qty=qty, risk_plan=risk_plan, trail_updates=0, mfe_r=0.0, mae_r=0.0)
@@ -262,6 +265,15 @@ def _manage(trade, bar, market):
     trade['mae_r'] = min(trade['mae_r'], -adv / r0)
     stop_hit = bar['low'] <= stop if d == 1 else bar['high'] >= stop
     tp_hit = bar['high'] >= tp if d == 1 else bar['low'] <= tp
+    if not (stop_hit or tp_hit) and trade['strategy'] in pe.V9_EXITS:
+        k = pe.V9_EXITS[trade['strategy']]          # wie live: Trailing vom besten Hoch/Tief oder keins
+        if k:
+            cand = (bar['high'] if d == 1 else bar['low']) - d * k * r0
+            new = max(stop, cand) if d == 1 else min(stop, cand)
+            if new != stop:
+                trade['stop'] = new
+                trade['trail_updates'] += 1
+        return False
     if not (stop_hit or tp_hit):
         if trade['strategy'] not in NO_TRAIL and (bar['close'] - entry) * d >= r0:
             cand = bar['close'] - d * r0
@@ -312,7 +324,7 @@ def execute(market, bars, signals, engine):
                 'strategy': s['strategy'], 'engine': engine, 'side': s['side'], 'signal_time': int(s['time']),
                 'signal_entry': float(s['entry']), 'signal_stop': float(s['stop']), 'signal_tp': float(s['tp']),
                 'status': 'PENDING', 'time_exit': s.get('time_exit'), 'phase': ctx.get('phase'), 'ny_session': ctx.get('ny_session'),
-                'reason': str(s.get('reason', ''))}
+                'reason': str(s.get('reason', '')), 'regime_1h': s.get('regime_1h')}
     return done + list(active.values())
 
 
@@ -458,6 +470,8 @@ def run(markets, candles, news_days=frozenset(), audit_samples=40):
             print(f'{m}: zu wenig 5M-Kerzen ({len(b5)}), übersprungen')
             continue
         t0 = time.time()
+        import v9_regime
+        v9_regime.set_hourly(m, candles.get((m, '1h')) or v9_regime.hourly_from_5m(b5))
         sigs = generate_signals(m, b5, b1)
         mt = execute(m, b5, sigs, '5m')
         if b1:

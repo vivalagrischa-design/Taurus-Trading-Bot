@@ -25,15 +25,20 @@ MARKETS=tuple(FUTURES)
 # dazu die neuen Strategien je Marktlage aus regime_strategies.py.
 # 60-Tage-Backtest V8: nur Strategien, die in ihrer Marktlage in BEIDEN Zeithaelften positiv waren.
 # Getestet und wieder entfernt: trend_pullback_mtf, trend_ema_pullback, range_bb_reentry, range_rsi2, imom_last30.
-ACTIVE_5M=('omar','ema20','trend_breakout_1h','orb5','trend_engulf_fade')
+# V9 (2026-11-07): Strategien je 1h-Marktlage aus dem Regime-Lab, nur LAB, nur Futures (v9_regime.py).
+from v9_regime import KEYS as V9_KEYS, EXITS as V9_EXITS
+ACTIVE_5M=('omar','ema20','trend_breakout_1h','orb5','trend_engulf_fade')+V9_KEYS
 ACTIVE_1M=()
 ACTIVE_EXTREMES=('bb_only_long',)
 # Maximaler Kostenanteil (Kommission + 2 Ticks Slippage) am geplanten Risiko je Kontrakt.
 # Zu enge Stops machen die Kosten zum groessten Verlustposten.
 MAX_COST_SHARE=float(os.environ.get('TAURUS_MAX_COST_SHARE','0.10'))
+# V9: 1h-Stops sind breit; ein Mikro-Kontrakt kann mehr als RISK riskieren. V9 handelt deshalb
+# mindestens 1 Kontrakt, solange das Risiko dafuer unter V9_MAX_RISK liegt. Auswertung in R.
+V9_MAX_RISK=float(os.environ.get('TAURUS_V9_MAX_RISK_USD','1000'))
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
 TEST_VERSION='taurus_v8_regime_20261104'
-_RULE_FILES=('strategies.py','regime_strategies.py','regime_gate.py','feed_quality.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','setup_quality.py','engine.py')
+_RULE_FILES=('strategies.py','regime_strategies.py','regime_gate.py','feed_quality.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','v9_regime.py','regime_lab.py','setup_quality.py','engine.py')
 def _ruleset_hash():
     h=hashlib.sha256()
     for name in _RULE_FILES:
@@ -250,6 +255,8 @@ def _open_pending(db,market,bar,history,suffix):
             multiplier,commission=FUTURES[market]
             risk_per_unit=abs(entry-stop)*multiplier+commission+FUTURES_TICK[market]*FUTURES_SLIP_TICKS*multiplier
             qty=math.floor(RISK/max(risk_per_unit,0.0001))
+            if t['strategy'] in V9_EXITS and qty<1 and risk_per_unit<=V9_MAX_RISK:
+                qty=1
             # TAURUS LAB is an independent strategy research ledger.
             # Its quantity is set ONLY by the 200 USD per-trade risk budget.
             # Lucid contract/account limits belong exclusively to lucid_executor.py.
@@ -265,7 +272,8 @@ def _open_pending(db,market,bar,history,suffix):
         if qty>0 and _estimated_net_at_stop({'side':side,'entry':entry,'qty':qty},tp,market)<=0:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='TP_NOT_PROFITABLE_NET' WHERE id=?",(t['id'],));continue
         risk_plan=qty*risk_per_unit
-        if qty<=0 or risk_plan>RISK+1e-5:
+        risk_cap=V9_MAX_RISK if t['strategy'] in V9_EXITS and market in FUTURES else RISK
+        if qty<=0 or risk_plan>max(RISK,min(risk_cap,risk_per_unit))+1e-5:
             db.execute("UPDATE trades SET status='CANCELLED',exit_reason='RISK_LIMIT' WHERE id=?",(t['id'],)); continue
         bbpos,pct,rsi=_entry_indicators(history)
         multiplier=FUTURES[market][0] if market in FUTURES else 1
@@ -355,7 +363,19 @@ def _close_open(db,market,bar,suffix,history=None):
         # TP is an actual exit. If both SL and TP are touched within one OHLC
         # candle, conservatively assume SL first (intrabar order unknown).
         # Trailing decisions use the finished candle and take effect next bar.
-        if not (stop_hit or tp_hit) and t['strategy'] not in ('bb_rsi_scale','rev_bounce'):
+        if not (stop_hit or tp_hit) and t['strategy'] in V9_EXITS:
+            # V9: Ausstiege wie im Regime-Lab. Fester Zielkurs (kein Trailing) oder Trailing
+            # ab Einstieg im Abstand trail x Anfangsrisiko (= 3 ATR 1h) vom besten Hoch/Tief.
+            k=V9_EXITS[t['strategy']]
+            initial_r=abs(float(t['entry'])-float(t['signal_stop']))
+            if k and initial_r>0:
+                extreme=float(bar['high']) if side=='LONG' else float(bar['low'])
+                candidate=extreme-direction*k*initial_r
+                new_stop=max(stop,candidate) if side=='LONG' else min(stop,candidate)
+                if new_stop!=stop:
+                    db.execute('UPDATE trades SET stop=?,stop_net_estimate=?,trail_updates=COALESCE(trail_updates,0)+1 WHERE id=?',
+                               (new_stop,_estimated_net_at_stop(t,new_stop,market),t['id']))
+        elif not (stop_hit or tp_hit) and t['strategy'] not in ('bb_rsi_scale','rev_bounce'):
             initial_r=abs(float(t['entry'])-float(t['signal_stop']))
             if initial_r>0:
                 direction=1 if side=='LONG' else -1

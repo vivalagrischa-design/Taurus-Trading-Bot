@@ -77,3 +77,18 @@ Forschungswerkzeuge, die nichts am Live-LAB ändern und nie auf die Live-Datenba
 - Eingefrorene Yahoo-Kerzen (Volumen 0 und Hoch = Tief) werden entfernt (`feed_quality.py`).
 - `candle_study.py`: misst Kerzenmuster × Marktlage gegen die Basisrate.
 - Workflow `TAURUS V8 Backtest + Kerzen-Studie` rechnet alles auf 60 Tagen neu; Berichte auf Branch `taurus-backtests` (`latest_v8.md`, `latest_candles.md`).
+
+
+## V9 – Strategien je 1h-Marktlage (Branch feature/v9-regime-1h)
+
+- Grundlage: Regime-Lab (`regime_lab.py`, Ergebnisse in `research/`), 1h-Kerzen über 2 Jahre, NQ/ES/GC,
+  nach Kosten, In-Sample **und** Out-of-Sample positiv, in allen drei Märkten positiv.
+- Neue 1h-Marktlage: `regime.py` auf 1h-Kerzen (Yahoo, 60 Tage, alle 10 Min.); `v9_regime.regime_now()`.
+- Sechs Strategien, nur LAB, nur Futures, jede nur in ihrer 1h-Marktlage:
+  `v9_bb_dip`, `v9_stoch_dip` (TREND_RUNTER), `v9_macd_long` (UEBERGANG), `v9_st_short` (RANGE),
+  `v9_keltner_long`, `v9_macd_short` (CHOP). Für TREND_HOCH gab es auf 1h keinen Kandidaten.
+- Signal auf der 1h-Kerze, Einstieg zum nächsten 5M-Open (= 1h-Open), Ausstiege wie im Backtest:
+  fester Zielkurs bzw. Trailing 3 ATR(1h) ab Einstieg, Zeitstopp. Das allgemeine 1R-Trailing gilt für V9 nicht.
+- Grösse: mindestens 1 Mikro-Kontrakt, solange dessen Risiko ≤ `TAURUS_V9_MAX_RISK_USD` (Standard 1000).
+  Auswertung daher in R.
+- Abschalten des 1h-Feeds: `TAURUS_V9_FEED=off`; Marktlagen-Filter wie bisher mit `TAURUS_REGIME_GATE=off`.
