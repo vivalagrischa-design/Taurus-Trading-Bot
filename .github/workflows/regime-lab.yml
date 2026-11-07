@@ -1,0 +1,35 @@
+name: TAURUS Regime-Lab (Strategien je Marktlage)
+on:
+  push:
+    branches: [research/regime-lab]
+  workflow_dispatch:
+concurrency:
+  group: taurus-regime-lab
+  cancel-in-progress: true
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        tf: ['1h', '15m', '5m']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tests
+        run: python -m unittest -v tests.test_regime_lab
+      - name: Regime-Lab ${{ matrix.tf }}
+        run: |
+          pip install 'yfinance>=0.2.65,<2'
+          python regime_lab.py --download --tf ${{ matrix.tf }} --cache candles_${{ matrix.tf }}.json.gz --out out/${{ matrix.tf }}
+          cat out/${{ matrix.tf }}/lab.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regime-lab-${{ matrix.tf }}
+          path: |
+            out/
+            candles_${{ matrix.tf }}.json.gz
+          retention-days: 30
