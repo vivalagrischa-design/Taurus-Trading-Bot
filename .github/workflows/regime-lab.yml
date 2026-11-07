@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tf: ['1h', '15m', '5m']
+        tf: ['1d', '1h', '15m', '5m']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -37,7 +37,7 @@ CRYPTO = ('btc', 'eth', 'sol')
 # Futures: Kosten je Kontrakt-Rundreise in Preispunkten (Kommission / Punktwert + 2 Ticks Slippage)
 FUT_COST = {'nq': 1.0 / 2.0 + 2 * 0.25, 'es': 1.0 / 5.0 + 2 * 0.25, 'gc': 1.6 / 10.0 + 2 * 0.10}
 CRYPTO_COST_RATE = 2 * (0.001 + 0.0002)          # Binance-Gebuehr + Slippage, beide Seiten
-PERIOD = {'1h': '730d', '15m': '60d', '5m': '60d'}
+PERIOD = {'1d': '10y', '1h': '730d', '15m': '60d', '5m': '60d'}
 IS_SHARE = 0.6
 MAX_COST_SHARE = 0.10
 MIN_N_IS, MIN_N_OOS = 30, 15
@@ -413,8 +413,9 @@ def simulate(market, bars, ind, regimes, key, fn, side, start=210):
             break
         gross = (exit_p - entry) * side
         r_net = (gross - cost_price(market, entry)) / risk
+        r_gross = gross / risk
         trades.append(dict(market=market, strategy=key, side='LONG' if side > 0 else 'SHORT',
-                           time=ind.t[i], regime=regimes[i], r=r_net, reason=reason,
+                           time=ind.t[i], regime=regimes[i], r=r_net, rg=r_gross, reason=reason,
                            bars=j - e_i + 1, cost_r=cost_price(market, entry) / risk))
         i = j + 1                              # eine Position je Strategie/Richtung/Markt
     return trades
@@ -451,6 +452,17 @@ def stat(rs):
 
 
 def evaluate(trades):
+    """Zellen je Strategie x Seite x Marktlage, getrennt fuer ALLE / FUTURES / KRYPTO."""
+    rows = []
+    for group, pick in (('ALLE', lambda t: True), ('FUTURES', lambda t: t['market'] not in CRYPTO),
+                        ('KRYPTO', lambda t: t['market'] in CRYPTO)):
+        for r in _evaluate([t for t in trades if pick(t)]):
+            r['group'] = group
+            rows.append(r)
+    return rows
+
+
+def _evaluate(trades):
     cells = defaultdict(list)
     for t in trades:
         cells[(t['strategy'], t['side'], t['regime'])].append(t)
@@ -471,7 +483,7 @@ def evaluate(trades):
                   and oos['avg'] > 0 and (allr['t'] or 0) >= 1.5 and mk_n and mk_pos * 2 >= mk_n)
         rows.append(dict(strategy=k, side=side, regime=reg, all=allr, IS=isr, OOS=oos,
                          markets={m: stat(v) for m, v in mk.items()}, mk_pos=mk_pos, mk_n=mk_n, passed=bool(passed),
-                         cost_r=sum(t['cost_r'] for t in ts) / len(ts)))
+                         cost_r=sum(t['cost_r'] for t in ts) / len(ts), gross=stat([t['rg'] for t in ts])))
     return rows
 
 
@@ -483,30 +495,44 @@ def report(rows, tf, meta):
     L = [f'# TAURUS Regime-Lab · {tf}', '',
          f"Daten: {meta['span']} · Märkte: {', '.join(meta['markets'])} · Trades: {meta['trades']} · "
          f'IS = erste {IS_SHARE:.0%} der Zeit, OOS = Rest. Ergebnis in R nach Kosten.', '',
-         '## Playbook (bestanden: IS>0, OOS>0, t≥1.5, ≥ Hälfte der Märkte positiv)', '',
-         '| Marktlage | Strategie | Seite | n | Ø R | Treffer | t | Ø R IS (n) | Ø R OOS (n) | Märkte + | je Markt Ø R (n) |',
-         '|---|---|---|---|---|---|---|---|---|---|---|']
-    ok = sorted([r for r in rows if r['passed']], key=lambda r: (REGIMES.index(r['regime']), -r['all']['avg']))
-    for r in ok:
-        L.append(f"| {r['regime']} | {r['strategy']} | {r['side']} | {r['all']['n']} | {_f(r['all']['avg'])} | "
-                 f"{r['all']['win']:.0%} | {_f(r['all']['t'], 1, False)} | {_f(r['IS']['avg'])} ({r['IS']['n']}) | "
-                 f"{_f(r['OOS']['avg'])} ({r['OOS']['n']}) | {r['mk_pos']}/{r['mk_n']} | "
-                 + ', '.join(f"{m} {_f(v['avg'])} ({v['n']})" for m, v in sorted(r['markets'].items())) + ' |')
-    if not ok:
-        L.append('| – | keine Strategie besteht | | | | | | | | |')
-    L += ['', '## Matrix Ø R (n) je Marktlage', '',
-          '| Strategie | Seite | ALLE | ' + ' | '.join(REGIMES) + ' | Kosten R |',
-          '|---|---|---|' + '---|' * len(REGIMES) + '---|']
-    idx = {(r['strategy'], r['side'], r['regime']): r for r in rows}
-    for k in STRATEGIES:
-        for side in ('LONG', 'SHORT'):
-            cells = []
-            for reg in ('ALLE',) + REGIMES:
-                r = idx.get((k, side, reg))
-                cells.append('–' if not r else f"{'**' if r['passed'] else ''}{_f(r['all']['avg'])} ({r['all']['n']}){'**' if r['passed'] else ''}")
-            a = idx.get((k, side, 'ALLE'))
-            L.append(f'| {k} | {side} | ' + ' | '.join(cells) + f" | {_f(a['cost_r'] if a else None, 2, False)} |")
-    L += ['', '## Strategien', ''] + [f'- **{k}**: {d}' for k, (d, _) in STRATEGIES.items()]
+         f'Getestete Zellen je Gruppe: {len(STRATEGIES) * 2 * len(REGIMES)}. Bei so vielen Tests bestehen '
+         'einige auch zufällig – Kandidaten brauchen einen Forward-Test.', '']
+    for group in ('ALLE', 'FUTURES', 'KRYPTO'):
+        gr = [r for r in rows if r['group'] == group]
+        if not gr:
+            continue
+        L += [f'## Playbook {group} (IS>0, OOS>0, t≥1.5, ≥ Hälfte der Märkte positiv)', '',
+              '| Marktlage | Strategie | Seite | n | Ø R | Ø R vor Kosten | Treffer | t | Ø R IS (n) | Ø R OOS (n) | Märkte + | je Markt Ø R (n) |',
+              '|---|---|---|---|---|---|---|---|---|---|---|---|']
+        ok = sorted([r for r in gr if r['passed']], key=lambda r: (REGIMES.index(r['regime']), -r['all']['avg']))
+        for r in ok:
+            L.append(f"| {r['regime']} | {r['strategy']} | {r['side']} | {r['all']['n']} | {_f(r['all']['avg'])} | "
+                     f"{_f(r['gross']['avg'])} | {r['all']['win']:.0%} | {_f(r['all']['t'], 1, False)} | "
+                     f"{_f(r['IS']['avg'])} ({r['IS']['n']}) | {_f(r['OOS']['avg'])} ({r['OOS']['n']}) | "
+                     f"{r['mk_pos']}/{r['mk_n']} | "
+                     + ', '.join(f"{m} {_f(v['avg'])} ({v['n']})" for m, v in sorted(r['markets'].items())) + ' |')
+        if not ok:
+            L.append('| – | keine Strategie besteht | | | | | | | | | | |')
+        L.append('')
+    for group, key, title in (('ALLE', 'all', 'nach Kosten'), ('ALLE', 'gross', 'VOR Kosten'),
+                              ('FUTURES', 'all', 'nach Kosten'), ('KRYPTO', 'all', 'nach Kosten')):
+        idx = {(r['strategy'], r['side'], r['regime']): r for r in rows if r['group'] == group}
+        if not idx:
+            continue
+        L += [f'## Matrix {group} · Ø R (n) {title} · fett = bestanden', '',
+              '| Strategie | Seite | ALLE | ' + ' | '.join(REGIMES) + ' | Kosten R |',
+              '|---|---|---|' + '---|' * len(REGIMES) + '---|']
+        for k in STRATEGIES:
+            for side in ('LONG', 'SHORT'):
+                cells = []
+                for reg in ('ALLE',) + REGIMES:
+                    r = idx.get((k, side, reg))
+                    b = '**' if r and r['passed'] and key == 'all' else ''
+                    cells.append('–' if not r else f"{b}{_f(r[key]['avg'])} ({r[key]['n']}){b}")
+                a = idx.get((k, side, 'ALLE'))
+                L.append(f'| {k} | {side} | ' + ' | '.join(cells) + f" | {_f(a['cost_r'] if a else None, 2, False)} |")
+        L.append('')
+    L += ['## Strategien', ''] + [f'- **{k}**: {d}' for k, (d, _) in STRATEGIES.items()]
     return '\n'.join(L) + '\n'
 
 
@@ -517,7 +543,7 @@ def download(markets, tf):
     out = {}
     for m in markets:
         df = yf.Ticker(YAHOO[m]).history(period=PERIOD[tf], interval=tf, auto_adjust=False, prepost=True, timeout=60)
-        step = {'1h': 3600, '15m': 900, '5m': 300}[tf]
+        step = {'1d': 86400, '1h': 3600, '15m': 900, '5m': 300}[tf]
         now = datetime.now(timezone.utc).timestamp()
         rows = []
         for idx, r in df.iterrows():
