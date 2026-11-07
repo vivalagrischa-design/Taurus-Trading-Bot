@@ -1,0 +1,64 @@
+name: TAURUS EMA 50/100 + TDFI Backtest (60 Tage Yahoo)
+on:
+  push:
+    branches: [feature/ema-tdfi]
+  workflow_dispatch:
+concurrency:
+  group: taurus-backtest-ema-tdfi
+  cancel-in-progress: true
+jobs:
+  ema_tdfi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Tests
+        run: |
+          pip install -r requirements.txt
+          python -m unittest -v tests.test_ema_tdfi tests.test_backtest tests.test_v8 tests.test_paper_execution test_lab_lucid_separation
+      - name: Kerzen laden (60 Tage 5M, 29 Tage 1M)
+        run: |
+          pip install 'yfinance>=0.2.65,<2'
+          python - <<'PY'
+          import backtest as bt
+          c={}
+          for m in ('nq','mes','mgc'):
+              c[(m,'5m')]=bt.load_yahoo(m,'5m',60); c[(m,'1m')]=bt.load_yahoo(m,'1m',29)
+              print(m,len(c[(m,'5m')]),len(c[(m,'1m')]))
+          bt.save_candles('candles.json.gz',c)
+          PY
+      - name: Backtest ohne Marktlagen-Filter (alle Marktlagen sichtbar)
+        run: python backtest.py --source yahoo --cache candles.json.gz --no-gate --audit-samples 0 --out out/nogate
+      - name: Zusammenfassung ema_tdfi
+        run: |
+          python - <<'PY' | tee summary.md >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from collections import defaultdict
+          d=json.load(open('out/nogate/backtest.json'))
+          t=[x for x in d['trades'] if x['strategy']=='ema_tdfi' and x.get('r') is not None]
+          def line(name,xs):
+              if not xs: return f'| {name} | 0 | | | |'
+              w=sum(1 for x in xs if x['r']>0)
+              return f"| {name} | {len(xs)} | {w/len(xs):.0%} | {sum(x['r'] for x in xs)/len(xs):+.2f} | {sum(x['pnl'] for x in xs):,.0f} |"
+          print('## ema_tdfi (60 Tage, nach Kosten, ohne Filter)\n')
+          print('| Gruppe | n | Treffer | Ø R | USD |\n|---|---|---|---|---|')
+          print(line('Gesamt',t))
+          for h in ('A','B'): print(line('Hälfte '+h,[x for x in t if x.get('half')==h]))
+          g=defaultdict(list)
+          for x in t: g[x.get('regime')].append(x)
+          for k in sorted(g, key=str): print(line('Lage '+str(k),g[k]))
+          m=defaultdict(list)
+          for x in t: m[x['market']].append(x)
+          for k in sorted(m): print(line('Markt '+k,m[k]))
+          PY
+          cat out/nogate/backtest.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taurus-ema-tdfi
+          path: |
+            out/
+            summary.md
+          retention-days: 30

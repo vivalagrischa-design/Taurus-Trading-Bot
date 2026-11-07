@@ -25,7 +25,7 @@ MARKETS=tuple(FUTURES)
 # dazu die neuen Strategien je Marktlage aus regime_strategies.py.
 # 60-Tage-Backtest V8: nur Strategien, die in ihrer Marktlage in BEIDEN Zeithaelften positiv waren.
 # Getestet und wieder entfernt: trend_pullback_mtf, trend_ema_pullback, range_bb_reentry, range_rsi2, imom_last30.
-ACTIVE_5M=('omar','ema20','trend_breakout_1h','orb5','trend_engulf_fade')
+ACTIVE_5M=('omar','ema20','trend_breakout_1h','orb5','trend_engulf_fade','ema_tdfi')  # ema_tdfi: LAB-Forward-Test seit 7.11.2026
 ACTIVE_1M=()
 ACTIVE_EXTREMES=('bb_only_long',)
 # Maximaler Kostenanteil (Kommission + 2 Ticks Slippage) am geplanten Risiko je Kontrakt.
@@ -33,7 +33,7 @@ ACTIVE_EXTREMES=('bb_only_long',)
 MAX_COST_SHARE=float(os.environ.get('TAURUS_MAX_COST_SHARE','0.10'))
 ALL_STRATS=ACTIVE_5M+ACTIVE_1M+ACTIVE_EXTREMES
 TEST_VERSION='taurus_v8_regime_20261104'
-_RULE_FILES=('strategies.py','regime_strategies.py','regime_gate.py','feed_quality.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','setup_quality.py','engine.py')
+_RULE_FILES=('strategies.py','regime_strategies.py','regime_gate.py','feed_quality.py','reversal.py','omar_v2.py','omar_volume_retest.py','bb_rsi.py','rosi_strategy.py','trend_pullback_mtf.py','ema_tdfi.py','setup_quality.py','engine.py')
 def _ruleset_hash():
     h=hashlib.sha256()
     for name in _RULE_FILES:
