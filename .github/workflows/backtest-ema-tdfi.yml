@@ -34,7 +34,7 @@ jobs:
         run: python backtest.py --source yahoo --cache candles.json.gz --no-gate --audit-samples 0 --out out/nogate
       - name: Zusammenfassung ema_tdfi
         run: |
-          python - <<'PY' | tee summary.md >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY' > summary.md
           import json
           from collections import defaultdict
           d=json.load(open('out/nogate/backtest.json'))
@@ -54,7 +54,8 @@ jobs:
           for x in t: m[x['market']].append(x)
           for k in sorted(m): print(line('Markt '+k,m[k]))
           PY
-          cat out/nogate/backtest.md >> "$GITHUB_STEP_SUMMARY"
+          cat summary.md
+          cat summary.md out/nogate/backtest.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: taurus-ema-tdfi
