@@ -15,7 +15,7 @@ class LabTests(unittest.TestCase):
         return L.simulate('btc', bars, ind, ['RANGE'] * len(bars), 'x', fn, 1, start=20)
 
     def test_target_and_cost(self):
-        rows = [(100, 101, 99, 100)] * 25 + [(100, 103, 99.9, 102.5)] + [(102.5, 103, 102, 102.5)] * 5
+        rows = [(100, 100.5, 99.5, 100)] * 25 + [(100, 103, 99.9, 102.5)] + [(102.5, 103, 102, 102.5)] * 5
         fn = lambda d, i, s: dict(stop=d.c[i] - 1, tp=d.c[i] + 2, hold=10) if i == 22 else None
         t = self._run(rows, fn)
         self.assertEqual(len(t), 1)
